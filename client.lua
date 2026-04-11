@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.0.0
+-- 🐉 RDE SLEEPMOD - CLIENT v3.1.0
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte
@@ -172,19 +172,13 @@ local function SpawnSleepingPed(identifier, data)
         return
     end
 
-    -- ✅ Find ground Z for perfect placement
-    local found, groundZ = GetGroundZFor_3dCoord(data.x, data.y, data.z + 5.0, false)
-    local spawnZ = found and groundZ or data.z
-    
-    local ped = CreatePed(4, model, data.x, data.y, spawnZ, data.w or 0.0, false, false)
+    -- ✅ Use stored Z directly — it was correct when saved
+    local ped = CreatePed(4, model, data.x, data.y, data.z - 0.5, data.w or 0.0, false, false)
     if not DoesEntityExist(ped) then
         SetModelAsNoLongerNeeded(model)
         return
     end
 
-    -- ✅ Place precisely on ground
-    PlaceObjectOnGroundProperly(ped)
-    
     spawnedPeds[identifier] = { entity = ped, skinApplied = false, targetSetup = false }
 
     SetEntityInvincible(ped, Config.InvinciblePeds)
@@ -214,19 +208,19 @@ local function SpawnSleepingPed(identifier, data)
             if spawnedPeds[identifier] then spawnedPeds[identifier].skinApplied = true end
         end
 
-        Wait(Config.Performance.animApplyDelay)
+        -- ✅ FIX: illenium-appearance clears ped tasks — need longer delay before anim
+        Wait(500)
         if not DoesEntityExist(ped) then return end
 
-        -- ✅ Play animation BEFORE freezing
+        -- ✅ Play sleeping animation
         if LoadAnimDict(Config.SleepingAnimation.dict) then
             TaskPlayAnim(ped, Config.SleepingAnimation.dict, Config.SleepingAnimation.clip,
                 8.0, -8.0, -1, 1, 0, false, false, false)
         end
 
-        -- ✅ Wait for animation to settle, then freeze
-        Wait(500)
+        -- ✅ Wait for animation to settle, then freeze (NO PlaceObjectOnGroundProperly!)
+        Wait(1000)
         if DoesEntityExist(ped) then
-            PlaceObjectOnGroundProperly(ped)
             FreezeEntityPosition(ped, true)
         end
 
@@ -381,7 +375,6 @@ function StopCarrying(entity, origCoords, origHeading)
 
     SetEntityCoordsNoOffset(entity, x, y, z, false, false, false)
     SetEntityHeading(entity, GetEntityHeading(playerPed))
-    PlaceObjectOnGroundProperly(entity)
     SetEntityCollision(entity, true, true)
 
     -- ✅ Play anim BEFORE freezing
@@ -390,11 +383,10 @@ function StopCarrying(entity, origCoords, origHeading)
             8.0, -8.0, -1, 1, 0, false, false, false)
     end
     
-    Wait(500)
-    PlaceObjectOnGroundProperly(entity)
+    Wait(1000)
     FreezeEntityPosition(entity, true)
 
-    -- ✅ Send actual final coords after ground placement
+    -- ✅ Send actual final coords
     local finalCoords = GetEntityCoords(entity)
     TriggerServerEvent('rde_sleepmod:updatePosition', carriedIdentifier,
         { x = finalCoords.x, y = finalCoords.y, z = finalCoords.z, w = GetEntityHeading(entity) })
