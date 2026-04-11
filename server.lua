@@ -16,6 +16,10 @@ local GetLanguageString = GetLanguageString
 local sleepingPlayers = {}
 local activeStashes = {}
 
+-- ✅ FIX: Cache source → stateId/charId because Ox.GetPlayer() returns nil during playerDropped
+---@type table<number, {stateId: string, charId: number}>
+local playerCache = {}
+
 -- ============================================
 -- 🔧 UTILITY
 -- ============================================
@@ -27,11 +31,24 @@ local function Debug(...)
 end
 
 --- ✅ ox_core uses charId (camelCase!) not charid
+--- Also populates playerCache for use during playerDropped
 local function GetPlayerData(source)
     local player = Ox.GetPlayer(source)
-    if not player then return nil, nil, nil end
-    -- ox_core: player.stateId, player.charId
-    return player.stateId, player.charId, player
+    if player then
+        local stateId = player.stateId
+        local charId = player.charId
+        -- Cache it so playerDropped can use it later
+        if stateId then
+            playerCache[source] = { stateId = stateId, charId = charId }
+        end
+        return stateId, charId, player
+    end
+    -- Fallback: use cache if player object is already gone (during disconnect)
+    local cached = playerCache[source]
+    if cached then
+        return cached.stateId, cached.charId, nil
+    end
+    return nil, nil, nil
 end
 
 -- ============================================
@@ -334,6 +351,15 @@ end)
 -- ============================================
 
 AddEventHandler('ox:playerLoaded', function(source, userid, charid)
+    -- ✅ Cache immediately (before SetTimeout) so playerDropped can use it
+    if source and source > 0 and charid then
+        local player = Ox.GetPlayer(source)
+        if player and player.stateId then
+            playerCache[source] = { stateId = player.stateId, charId = charid }
+            Debug('Cached player data for source:', source, '| stateId:', player.stateId, '| charId:', charid)
+        end
+    end
+
     SetTimeout(5000, function() -- ✅ 5s delay to ensure ox_inventory is fully loaded
         if not source or source <= 0 then return end
         local stateId, playerCharId, player = GetPlayerData(source)
@@ -454,6 +480,9 @@ AddEventHandler('playerDropped', function(reason)
         else
             Debug('playerDropped: No cache for:', stateId)
         end
+
+        -- ✅ Clean up player cache after processing
+        playerCache[src] = nil
     end)
 end)
 
