@@ -107,7 +107,7 @@ Built on ox_core · ox_lib · ox_inventory · ox_target · oxmysql
 
 ```bash
 cd resources
-git clone https://github.com/RedDragonElite/rde_sleepmod.git
+git clone https://github.com/RedDragonElite/rde_sleep.git rde_sleepmod
 ```
 
 ### 2. Add to `server.cfg`
