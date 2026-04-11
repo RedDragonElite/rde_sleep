@@ -480,6 +480,40 @@ RegisterNetEvent('ox:playerLogout', function()
     })
 end)
 
+-- ✅ FIX: Teleport player to sleeping ped position on reconnect
+-- (if someone carried the sleeper, player spawns at new location)
+RegisterNetEvent('rde_sleepmod:teleportToSleepPos', function(x, y, z, w)
+    CreateThread(function()
+        local ped = cache.ped
+        if not ped or not DoesEntityExist(ped) then
+            -- Wait for ped
+            local timeout = 0
+            while (not ped or not DoesEntityExist(ped)) and timeout < 100 do
+                Wait(100)
+                ped = cache.ped
+                timeout = timeout + 1
+            end
+        end
+        if not ped or not DoesEntityExist(ped) then return end
+
+        local currentCoords = GetEntityCoords(ped)
+        local targetCoords = vector3(x, y, z)
+        local dist = #(currentCoords - targetCoords)
+
+        -- Only teleport if > 5m from sleeping position
+        if dist > 5.0 then
+            DoScreenFadeOut(500)
+            Wait(500)
+            SetEntityCoords(ped, x, y, z, false, false, false, false)
+            SetEntityHeading(ped, w or 0.0)
+            PlaceObjectOnGroundProperly(ped)
+            Wait(300)
+            DoScreenFadeIn(500)
+            Debug(('Teleported to sleeping position: %.1f, %.1f, %.1f (was %.1f away)'):format(x, y, z, dist))
+        end
+    end)
+end)
+
 -- ============================================
 -- 🧹 CLEANUP
 -- ============================================
