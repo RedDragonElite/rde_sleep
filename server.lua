@@ -334,12 +334,30 @@ end)
 -- ============================================
 
 AddEventHandler('ox:playerLoaded', function(source, userid, charid)
-    SetTimeout(2000, function() -- ✅ Longer delay to ensure ox_inventory has loaded player
+    SetTimeout(5000, function() -- ✅ 5s delay to ensure ox_inventory is fully loaded
         if not source or source <= 0 then return end
-        local stateId = select(1, GetPlayerData(source))
+        local stateId, playerCharId, player = GetPlayerData(source)
         if not stateId or not sleepingPlayers[stateId] then return end
 
+        local sleepData = sleepingPlayers[stateId]
         Debug('Player reconnected:', stateId)
+
+        -- ✅ FIX: Update characters table with sleeping ped position
+        -- So if someone carried the sleeper, the player spawns at the new location
+        local coords = sleepData.coords and json.decode(sleepData.coords)
+        if coords and playerCharId then
+            -- Update characters table x, y, z, heading
+            MySQL.update([[
+                UPDATE characters SET x = ?, y = ?, z = ?, heading = ? WHERE charid = ?
+            ]], { coords.x, coords.y, coords.z, coords.w or 0.0, playerCharId })
+
+            -- ✅ Teleport player to sleeping ped position (they may have spawned at old coords)
+            TriggerClientEvent('rde_sleepmod:teleportToSleepPos', source, coords.x, coords.y, coords.z, coords.w or 0.0)
+
+            Debug(('Updated characters spawn pos for charid %d: %.1f, %.1f, %.1f'):format(
+                playerCharId, coords.x, coords.y, coords.z
+            ))
+        end
 
         -- ✅ If stash was accessed (robbery happened), calculate what was stolen
         if activeStashes[stateId] then
@@ -347,7 +365,7 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
 
             -- Get original snapshot (what they had when they disconnected)
             local originalItems = {}
-            local origData = sleepingPlayers[stateId].inventory
+            local origData = sleepData.inventory
             if origData then
                 local parsed = type(origData) == 'string' and json.decode(origData) or origData
                 if parsed then
@@ -483,6 +501,15 @@ RegisterNetEvent('rde_sleepmod:updatePosition', function(identifier, newCoords)
     if not data then return end
     data.coords = json.encode(newCoords)
     MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET coords = ? WHERE identifier = ?', {data.coords, identifier})
+
+    -- ✅ FIX: Also update characters table so player spawns at new position
+    if data.charid and data.charid > 0 then
+        MySQL.update([[
+            UPDATE characters SET x = ?, y = ?, z = ?, heading = ? WHERE charid = ?
+        ]], { newCoords.x, newCoords.y, newCoords.z, newCoords.w or 0.0, data.charid })
+        Debug(('Updated characters spawn pos for sleeper %s (charid %d)'):format(identifier, data.charid))
+    end
+
     SyncGlobalState()
 end)
 
