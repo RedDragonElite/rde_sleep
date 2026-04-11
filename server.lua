@@ -187,7 +187,7 @@ end
 
 local function CreateSleepingEntry(source, data)
     local stateId, charId, player = GetPlayerData(source)
-    if not stateId or not player then return end
+    if not stateId then return end
 
     Debug('CreateSleepingEntry: stateId=' .. tostring(stateId) .. ' charId=' .. tostring(charId))
 
@@ -478,7 +478,72 @@ AddEventHandler('playerDropped', function(reason)
             SyncGlobalState()
             Debug('playerDropped: Activated sleeping entry from cache:', stateId, '| skin:', skin and 'YES' or 'NO')
         else
-            Debug('playerDropped: No cache for:', stateId)
+            -- ✅ FIX: No cache exists (first disconnect or table was dropped)
+            -- Build sleeping entry directly from characters + playerskins tables
+            if charId and charId > 0 then
+                Debug('playerDropped: No cache — building from characters/playerskins for charId:', charId)
+
+                local charData = MySQL.single.await(
+                    'SELECT x, y, z, heading FROM characters WHERE charid = ?',
+                    {charId}
+                )
+
+                if charData then
+                    local skin = LoadSkinFromDB(charId)
+                    local model = joaat('mp_m_freemode_01') -- Default model
+
+                    -- Try to get model from playerskins
+                    local skinResult = MySQL.single.await(
+                        'SELECT skin FROM playerskins WHERE citizenid = ? LIMIT 1',
+                        {charId}
+                    )
+                    if skinResult and skinResult.skin then
+                        local ok, parsed = pcall(json.decode, skinResult.skin)
+                        if ok and parsed and parsed.model then
+                            model = type(parsed.model) == 'string' and joaat(parsed.model) or parsed.model
+                        end
+                    end
+
+                    -- Get inventory
+                    local inventoryData = {}
+                    local invOk, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, src)
+                    if invOk and inventory and inventory.items then
+                        for _, item in pairs(inventory.items) do
+                            if item.count and item.count > 0 then
+                                inventoryData[#inventoryData + 1] = {
+                                    name = item.name,
+                                    count = item.count,
+                                    slot = item.slot,
+                                    metadata = item.metadata,
+                                }
+                            end
+                        end
+                    end
+
+                    local coords = json.encode({
+                        x = charData.x, y = charData.y, z = charData.z,
+                        w = charData.heading or 0.0
+                    })
+
+                    local entry = {
+                        coords = coords,
+                        model = model,
+                        charid = charId,
+                        skin = skin,
+                        inventory = json.encode(inventoryData),
+                    }
+
+                    sleepingPlayers[stateId] = entry
+                    SaveToDB(stateId, entry)
+                    SyncGlobalState()
+
+                    Debug('playerDropped: Created sleeping entry from characters table:', stateId, '| skin:', skin and 'YES' or 'NO')
+                else
+                    Debug('playerDropped: No character data found for charId:', charId)
+                end
+            else
+                Debug('playerDropped: No cache AND no charId for:', stateId)
+            end
         end
 
         -- ✅ Clean up player cache after processing
@@ -494,7 +559,7 @@ end)
 RegisterNetEvent('rde_sleepmod:saveAppearanceCache', function(data)
     local src = source
     local stateId, charId, player = GetPlayerData(src)
-    if not stateId or not player then return end
+    if not stateId or not charId then return end
 
     -- ✅ Load skin from playerskins
     local skin = LoadSkinFromDB(charId)
@@ -522,7 +587,7 @@ RegisterNetEvent('rde_sleepmod:saveAppearanceCache', function(data)
         inventory = json.encode(inventoryData),
     })
 
-    Debug('Cache saved for:', player.name, '| charId:', charId, '| skin:', skin and 'YES' or 'NO')
+    Debug('Cache saved for:', stateId, '| charId:', charId, '| skin:', skin and 'YES' or 'NO')
 end)
 
 RegisterNetEvent('rde_sleepmod:updatePosition', function(identifier, newCoords)
