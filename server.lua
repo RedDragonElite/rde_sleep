@@ -157,7 +157,7 @@ end
 
 -- ============================================
 -- 🎨 SKIN: Load from playerskins table
--- ✅ FIXED: No 'active' filter, simple query
+-- ✅ FIXED: Filter by active = 1 to get correct skin
 -- ============================================
 
 local function LoadSkinFromDB(charid)
@@ -166,11 +166,19 @@ local function LoadSkinFromDB(charid)
         return nil
     end
 
-    -- ✅ FIXED: Column is 'citizenid' in playerskins table
+    -- ✅ Get ACTIVE skin first
     local result = MySQL.single.await(
-        'SELECT skin FROM playerskins WHERE citizenid = ? LIMIT 1',
+        'SELECT skin FROM playerskins WHERE citizenid = ? AND active = 1 LIMIT 1',
         {charid}
     )
+
+    -- Fallback: if no active skin, get latest
+    if not result or not result.skin then
+        result = MySQL.single.await(
+            'SELECT skin FROM playerskins WHERE citizenid = ? ORDER BY id DESC LIMIT 1',
+            {charid}
+        )
+    end
 
     if result and result.skin then
         Debug('Loaded skin from playerskins for charid:', charid)
@@ -363,7 +371,14 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
     SetTimeout(5000, function() -- ✅ 5s delay to ensure ox_inventory is fully loaded
         if not source or source <= 0 then return end
         local stateId, playerCharId, player = GetPlayerData(source)
-        if not stateId or not sleepingPlayers[stateId] then return end
+        if not stateId then return end
+        
+        -- ✅ FIX: Always clean up DB entry on login, even if not in memory
+        if not sleepingPlayers[stateId] then
+            -- Still delete from DB in case entry exists there but not in memory
+            DeleteFromDB(stateId)
+            return
+        end
 
         local sleepData = sleepingPlayers[stateId]
         Debug('Player reconnected:', stateId)
@@ -494,7 +509,7 @@ AddEventHandler('playerDropped', function(reason)
 
                     -- Try to get model from playerskins
                     local skinResult = MySQL.single.await(
-                        'SELECT skin FROM playerskins WHERE citizenid = ? LIMIT 1',
+                        'SELECT skin FROM playerskins WHERE citizenid = ? AND active = 1 LIMIT 1',
                         {charId}
                     )
                     if skinResult and skinResult.skin then
@@ -669,6 +684,21 @@ MySQL.ready(function()
 
     SyncGlobalState()
     Debug('Server initialized with', #dbEntries, 'sleeping players')
+
+    -- ✅ FIX: Remove sleeping entries for players who are already online
+    -- (handles script restart while players are connected)
+    Wait(3000)
+    local players = GetPlayers()
+    for _, playerId in ipairs(players) do
+        local src = tonumber(playerId)
+        if src and src > 0 then
+            local stateId = select(1, GetPlayerData(src))
+            if stateId and sleepingPlayers[stateId] then
+                Debug('Init cleanup: Removing sleeping entry for online player:', stateId)
+                RemoveSleepingEntry(stateId)
+            end
+        end
+    end
 end)
 
 -- ============================================
