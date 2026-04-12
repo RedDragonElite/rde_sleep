@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.0.1
+-- 🐉 RDE SLEEPMOD - CLIENT v1.0.2
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte
@@ -395,10 +395,10 @@ function StopCarrying(entity, origCoords, origHeading)
     Wait(1000)
     FreezeEntityPosition(entity, true)
 
-    -- ✅ Send actual final coords
-    local finalCoords = GetEntityCoords(entity)
+    -- ✅ FIX: Send PLAYER coords (x, y, z) not entity coords
+    -- Entity Z drifts after animation+freeze, player Z is correct (standing on ground)
     TriggerServerEvent('rde_sleepmod:updatePosition', carriedIdentifier,
-        { x = finalCoords.x, y = finalCoords.y, z = finalCoords.z, w = GetEntityHeading(entity) })
+        { x = x, y = y, z = z, w = GetEntityHeading(entity) })
 
     lib.hideTextUI()
     lib.notify({ title = GetLanguageString('success'), description = GetLanguageString('player_released'), type = 'success' })
