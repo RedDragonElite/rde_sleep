@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.0.1
+-- 🐉 RDE SLEEPMOD - SERVER v1.0.2
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -84,7 +84,7 @@ local function IsPlayerAdmin(source)
         return false
     end
 
-    local identifier = GetPlayerIdentifierByType(source, 'steam')
+    local identifier = GetPlayerIdentifierByType(source, 'steam') or GetPlayerIdentifierByType(source, 'license')
     local cfg = Config.AdminSystem
 
     for _, method in ipairs(cfg.checkOrder) do
@@ -420,22 +420,10 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
         local sleepData = sleepingPlayers[stateId]
         Debug('Player reconnected:', stateId)
 
-        -- ✅ FIX: Update characters table with sleeping ped position
-        -- So if someone carried the sleeper, the player spawns at the new location
-        local coords = sleepData.coords and json.decode(sleepData.coords)
-        if coords and playerCharId then
-            -- Update characters table x, y, z, heading
-            MySQL.update([[
-                UPDATE characters SET x = ?, y = ?, z = ?, heading = ? WHERE charid = ?
-            ]], { coords.x, coords.y, coords.z, coords.w or 0.0, playerCharId })
-
-            -- ✅ Teleport player to sleeping ped position (they may have spawned at old coords)
-            TriggerClientEvent('rde_sleepmod:teleportToSleepPos', source, coords.x, coords.y, coords.z, coords.w or 0.0)
-
-            Debug(('Updated characters spawn pos for charid %d: %.1f, %.1f, %.1f'):format(
-                playerCharId, coords.x, coords.y, coords.z
-            ))
-        end
+        -- ✅ NO teleport, NO characters update here!
+        -- characters table is already updated by updatePosition (carry-drop)
+        -- For normal disconnects, ox_core saves the correct position automatically
+        -- Teleporting here caused sky-spawns and death-on-login
 
         -- ✅ If stash was accessed (robbery happened), calculate what was stolen
         if activeStashes[stateId] then
