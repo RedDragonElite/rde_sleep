@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.0.0
+-- 🐉 RDE SLEEPMOD - SERVER v1.0.1
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -79,29 +79,45 @@ end
 
 local function IsPlayerAdmin(source)
     local stateId, charId, player = GetPlayerData(source)
-    if not player then return false end
+    if not player then
+        Debug('IsPlayerAdmin: No player object for source:', source)
+        return false
+    end
 
     local identifier = GetPlayerIdentifierByType(source, 'steam')
     local cfg = Config.AdminSystem
 
     for _, method in ipairs(cfg.checkOrder) do
         if method == 'ace' then
-            if IsPlayerAceAllowed(source, cfg.acePermission) then return true end
+            if IsPlayerAceAllowed(source, cfg.acePermission) then
+                Debug('IsPlayerAdmin: PASS via ACE for source:', source)
+                return true
+            end
         elseif method == 'oxcore' then
-            local ok, groups = pcall(player.getGroups, player)
+            local ok, groups = pcall(function()
+                return player.getGroups()
+            end)
+            Debug('IsPlayerAdmin: ox_core groups check — ok:', ok, '| groups:', groups and json.encode(groups) or 'nil')
             if ok and groups then
                 for groupName, minGrade in pairs(cfg.oxGroups) do
-                    if groups[groupName] and groups[groupName] >= minGrade then return true end
+                    if groups[groupName] and groups[groupName] >= minGrade then
+                        Debug('IsPlayerAdmin: PASS via oxcore group:', groupName, 'grade:', groups[groupName])
+                        return true
+                    end
                 end
             end
         elseif method == 'steam' then
             if identifier then
                 for _, id in ipairs(cfg.steamIds) do
-                    if identifier == id then return true end
+                    if identifier == id then
+                        Debug('IsPlayerAdmin: PASS via Steam ID:', identifier)
+                        return true
+                    end
                 end
             end
         end
     end
+    Debug('IsPlayerAdmin: FAILED all checks for source:', source, '| steam:', identifier or 'none')
     return false
 end
 
@@ -360,23 +376,44 @@ end)
 
 AddEventHandler('ox:playerLoaded', function(source, userid, charid)
     -- ✅ Cache immediately (before SetTimeout) so playerDropped can use it
-    if source and source > 0 and charid then
+    if source and source > 0 then
         local player = Ox.GetPlayer(source)
         if player and player.stateId then
-            playerCache[source] = { stateId = player.stateId, charId = charid }
-            Debug('Cached player data for source:', source, '| stateId:', player.stateId, '| charId:', charid)
+            playerCache[source] = { stateId = player.stateId, charId = player.charId or charid }
+            Debug('Cached player data for source:', source, '| stateId:', player.stateId, '| charId:', player.charId or charid)
+            
+            -- ✅ FIX: Immediately remove from memory if exists
+            if sleepingPlayers[player.stateId] then
+                Debug('ox:playerLoaded: Found sleeping entry in memory, scheduling removal:', player.stateId)
+            end
         end
     end
 
-    SetTimeout(5000, function() -- ✅ 5s delay to ensure ox_inventory is fully loaded
+    SetTimeout(5000, function()
         if not source or source <= 0 then return end
         local stateId, playerCharId, player = GetPlayerData(source)
-        if not stateId then return end
         
-        -- ✅ FIX: Always clean up DB entry on login, even if not in memory
+        -- ✅ FIX: If no stateId from Ox, try to find by charId in DB
+        if not stateId and charid and charid > 0 then
+            local dbEntry = MySQL.single.await(
+                'SELECT identifier FROM ' .. Config.DatabaseTable .. ' WHERE charid = ?',
+                {charid}
+            )
+            if dbEntry then
+                stateId = dbEntry.identifier
+                Debug('Found sleeping entry by charId fallback:', stateId)
+            end
+        end
+        
+        if not stateId then
+            Debug('ox:playerLoaded: No stateId found for source:', source)
+            return
+        end
+        
+        -- ✅ FIX: Always clean up DB entry on login
         if not sleepingPlayers[stateId] then
-            -- Still delete from DB in case entry exists there but not in memory
             DeleteFromDB(stateId)
+            Debug('ox:playerLoaded: Cleaned orphan DB entry for:', stateId)
             return
         end
 
@@ -685,20 +722,38 @@ MySQL.ready(function()
     SyncGlobalState()
     Debug('Server initialized with', #dbEntries, 'sleeping players')
 
-    -- ✅ FIX: Remove sleeping entries for players who are already online
-    -- (handles script restart while players are connected)
-    Wait(3000)
-    local players = GetPlayers()
-    for _, playerId in ipairs(players) do
-        local src = tonumber(playerId)
-        if src and src > 0 then
-            local stateId = select(1, GetPlayerData(src))
-            if stateId and sleepingPlayers[stateId] then
-                Debug('Init cleanup: Removing sleeping entry for online player:', stateId)
-                RemoveSleepingEntry(stateId)
+    -- ✅ FIX: Robust cleanup for players who are already online
+    -- Runs multiple times with increasing delays because Ox.GetPlayer
+    -- might not be ready for all players immediately after script restart
+    local function CleanupOnlinePlayers()
+        local cleaned = 0
+        local players = GetPlayers()
+        for _, playerId in ipairs(players) do
+            local src = tonumber(playerId)
+            if src and src > 0 then
+                local stateId = select(1, GetPlayerData(src))
+                if stateId and sleepingPlayers[stateId] then
+                    Debug('Init cleanup: Removing sleeping entry for online player:', stateId)
+                    RemoveSleepingEntry(stateId)
+                    cleaned = cleaned + 1
+                end
             end
         end
+        return cleaned
     end
+
+    -- Try cleanup at 3s, 8s, and 15s after init
+    Wait(3000)
+    local c1 = CleanupOnlinePlayers()
+    Debug('Init cleanup pass 1:', c1, 'entries removed')
+
+    Wait(5000)
+    local c2 = CleanupOnlinePlayers()
+    Debug('Init cleanup pass 2:', c2, 'entries removed')
+
+    Wait(7000)
+    local c3 = CleanupOnlinePlayers()
+    Debug('Init cleanup pass 3:', c3, 'entries removed')
 end)
 
 -- ============================================
