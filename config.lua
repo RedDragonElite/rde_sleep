@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CONFIG v1.0.0
+-- 🐉 RDE SLEEPMOD - CONFIG v1.0.1
 -- Proximity Loading | Statebag Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -98,7 +98,7 @@ Config.CarryAnimation = {
 Config.AdminSystem = {
     acePermission = 'rde.sleepmod',
     steamIds = { 'steam:110000101605859' },
-    oxGroups = { ['admin'] = 0, ['superadmin'] = 0, ['management'] = 0 },
+    oxGroups = { ['admin'] = 0, ['superadmin'] = 0, ['management'] = 0, ['owner'] = 0 },
     checkOrder = {'ace', 'oxcore', 'steam'}
 }
 
