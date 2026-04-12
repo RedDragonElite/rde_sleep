@@ -1,24 +1,24 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.0.0
+-- 🐉 RDE SLEEPMOD - SERVER v1.0.1
 -- Proximity Loading | GlobalState Sync | ox_core
--- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
 
 local Config = require 'config'
+local Ox = require '@ox_core.lib.init'
 local GetLanguageString = GetLanguageString
 
 -- ============================================
--- 🎯 LOCAL STATE
+-- 🎯 STATE: Server-side data only, NO entities
 -- ============================================
 
----@type table<string, {entity: number, skinApplied: boolean, targetSetup: boolean}>
-local spawnedPeds = {}
-local isCarrying = false
-local carriedEntity = nil
-local carriedIdentifier = nil
-local isAdmin = false
-local playerReady = false
+---@type table<string, {coords: string, model: number, charid: number, skin: string?, inventory: string?}>
+local sleepingPlayers = {}
+local activeStashes = {}
+
+-- ✅ FIX: Cache source → stateId/charId because Ox.GetPlayer() returns nil during playerDropped
+---@type table<number, {stateId: string, charId: number}>
+local playerCache = {}
 
 -- ============================================
 -- 🔧 UTILITY
@@ -30,480 +30,651 @@ local function Debug(...)
     end
 end
 
-local function LoadAnimDict(dict)
-    if not dict then return false end
-    if HasAnimDictLoaded(dict) then return true end
-    RequestAnimDict(dict)
-    local t = 0
-    while not HasAnimDictLoaded(dict) and t < 100 do Wait(10) t = t + 1 end
-    return HasAnimDictLoaded(dict)
-end
-
-local function LoadModel(model)
-    if type(model) == 'string' then model = joaat(model) end
-    if not IsModelValid(model) then return false end
-    if HasModelLoaded(model) then return true end
-    RequestModel(model)
-    local t = 0
-    while not HasModelLoaded(model) and t < 100 do Wait(10) t = t + 1 end
-    return HasModelLoaded(model)
+--- ✅ ox_core uses charId (camelCase!) not charid
+--- Also populates playerCache for use during playerDropped
+local function GetPlayerData(source)
+    local player = Ox.GetPlayer(source)
+    if player then
+        local stateId = player.stateId
+        local charId = player.charId
+        -- Cache it so playerDropped can use it later
+        if stateId then
+            playerCache[source] = { stateId = stateId, charId = charId }
+        end
+        return stateId, charId, player
+    end
+    -- Fallback: use cache if player object is already gone (during disconnect)
+    local cached = playerCache[source]
+    if cached then
+        return cached.stateId, cached.charId, nil
+    end
+    return nil, nil, nil
 end
 
 -- ============================================
--- 🎨 SKIN APPLICATION (illenium-appearance format)
+-- 📡 GLOBALSTATE SYNC
 -- ============================================
 
-local OVERLAY_MAP = {
-    blemishes = 0, beard = 1, eyebrows = 2, ageing = 3,
-    makeUp = 4, blush = 5, complexion = 6, sunDamage = 7,
-    lipstick = 8, moleAndFreckles = 9, chestHair = 10, bodyBlemishes = 11,
-}
-
-local FACE_FEATURE_MAP = {
-    noseWidth = 0, nosePeakHigh = 1, nosePeakSize = 2, noseBoneHigh = 3,
-    nosePeakLowering = 4, noseBoneTwist = 5, eyeBrownHigh = 6, eyeBrownForward = 7,
-    cheeksBoneHigh = 8, cheeksBoneWidth = 9, cheeksWidth = 10, eyesOpening = 11,
-    lipsThickness = 12, jawBoneWidth = 13, jawBoneBackSize = 14, chinBoneLowering = 15,
-    chinBoneLenght = 16, chinBoneSize = 17, chinHole = 18, neckThickness = 19,
-}
-
-local function ApplySkin(ped, skinJson)
-    if not ped or not DoesEntityExist(ped) or not skinJson then return end
-
-    local skin = type(skinJson) == 'string' and json.decode(skinJson) or skinJson
-    if not skin then return end
-
-    -- Try illenium-appearance first
-    local ok = pcall(function()
-        exports['illenium-appearance']:setPedAppearance(ped, skin)
-    end)
-    if ok then
-        Debug('Skin via illenium-appearance')
-        return
-    end
-
-    -- Manual application
-    if skin.components then
-        for _, c in pairs(skin.components) do
-            if c.component_id and c.drawable and c.drawable >= 0 then
-                SetPedComponentVariation(ped, c.component_id, c.drawable, c.texture or 0, 0)
-            end
+local function SyncGlobalState()
+    local syncData = {}
+    for identifier, data in pairs(sleepingPlayers) do
+        local coords = json.decode(data.coords)
+        if coords then
+            syncData[identifier] = {
+                x = coords.x,
+                y = coords.y,
+                z = coords.z,
+                w = coords.w or 0.0,
+                model = data.model,
+            }
         end
     end
+    GlobalState.sleepingPlayers = syncData
+    Debug('GlobalState synced,', next(syncData) and 'has entries' or 'empty')
+end
 
-    if skin.props then
-        for _, p in pairs(skin.props) do
-            if p.prop_id then
-                if p.drawable and p.drawable >= 0 then
-                    SetPedPropIndex(ped, p.prop_id, p.drawable, p.texture or 0, true)
-                else
-                    ClearPedProp(ped, p.prop_id)
+-- ============================================
+-- 🛡️ ADMIN
+-- ============================================
+
+local function IsPlayerAdmin(source)
+    local stateId, charId, player = GetPlayerData(source)
+    if not player then
+        Debug('IsPlayerAdmin: No player object for source:', source)
+        return false
+    end
+
+    local identifier = GetPlayerIdentifierByType(source, 'steam')
+    local cfg = Config.AdminSystem
+
+    for _, method in ipairs(cfg.checkOrder) do
+        if method == 'ace' then
+            if IsPlayerAceAllowed(source, cfg.acePermission) then
+                Debug('IsPlayerAdmin: PASS via ACE for source:', source)
+                return true
+            end
+        elseif method == 'oxcore' then
+            local ok, groups = pcall(function()
+                return player.getGroups()
+            end)
+            Debug('IsPlayerAdmin: ox_core groups check — ok:', ok, '| groups:', groups and json.encode(groups) or 'nil')
+            if ok and groups then
+                for groupName, minGrade in pairs(cfg.oxGroups) do
+                    if groups[groupName] and groups[groupName] >= minGrade then
+                        Debug('IsPlayerAdmin: PASS via oxcore group:', groupName, 'grade:', groups[groupName])
+                        return true
+                    end
                 end
             end
-        end
-    end
-
-    if skin.headBlend then
-        local h = skin.headBlend
-        SetPedHeadBlendData(ped,
-            h.shapeFirst or 0, h.shapeSecond or 0, h.shapeThird or 0,
-            h.skinFirst or 0, h.skinSecond or 0, h.skinThird or 0,
-            (h.shapeMix or 0.0) + 0.0, (h.skinMix or 0.0) + 0.0, (h.thirdMix or 0.0) + 0.0, false)
-    end
-
-    if skin.hair then
-        SetPedComponentVariation(ped, 2, skin.hair.style or 0, skin.hair.texture or 0, 0)
-        SetPedHairColor(ped, skin.hair.color or 0, skin.hair.highlight or 0)
-    end
-
-    if skin.faceFeatures then
-        for name, val in pairs(skin.faceFeatures) do
-            local idx = FACE_FEATURE_MAP[name]
-            if idx then SetPedFaceFeature(ped, idx, (val or 0.0) + 0.0) end
-        end
-    end
-
-    if skin.headOverlays then
-        for name, ov in pairs(skin.headOverlays) do
-            local idx = OVERLAY_MAP[name]
-            if idx then
-                SetPedHeadOverlay(ped, idx, ov.style or 0, (ov.opacity or 0.0) + 0.0)
-                if ov.color ~= nil then
-                    local ct = 1
-                    if idx == 4 or idx == 5 or idx == 8 then ct = 2 end
-                    SetPedHeadOverlayColor(ped, idx, ct, ov.color or 0, ov.secondColor or 0)
-                end
-            end
-        end
-    end
-
-    if skin.eyeColor and skin.eyeColor >= 0 then
-        SetPedEyeColor(ped, skin.eyeColor)
-    end
-
-    if skin.tattoos then
-        ClearPedDecorations(ped)
-        for _, tattooList in pairs(skin.tattoos) do
-            if type(tattooList) == 'table' then
-                for _, t in pairs(tattooList) do
-                    local col = t.collection
-                    local ov = t.hashMale or t.hashFemale
-                    if col and ov then
-                        AddPedDecorationFromHashes(ped, joaat(col), joaat(ov))
+        elseif method == 'steam' then
+            if identifier then
+                for _, id in ipairs(cfg.steamIds) do
+                    if identifier == id then
+                        Debug('IsPlayerAdmin: PASS via Steam ID:', identifier)
+                        return true
                     end
                 end
             end
         end
     end
-
-    Debug('Skin applied manually')
+    Debug('IsPlayerAdmin: FAILED all checks for source:', source, '| steam:', identifier or 'none')
+    return false
 end
 
 -- ============================================
--- 🎮 PED SPAWNING (Client-side, proximity)
+-- 📊 DATABASE
 -- ============================================
 
-local function SpawnSleepingPed(identifier, data)
-    if spawnedPeds[identifier] then return end
-
-    local model = data.model
-    if not LoadModel(model) then
-        Debug('Model load failed:', model)
-        return
-    end
-
-    -- ✅ Use stored Z directly — it was correct when saved
-    local ped = CreatePed(4, model, data.x, data.y, data.z - 0.5, data.w or 0.0, false, false)
-    if not DoesEntityExist(ped) then
-        SetModelAsNoLongerNeeded(model)
-        return
-    end
-
-    spawnedPeds[identifier] = { entity = ped, skinApplied = false, targetSetup = false }
-
-    SetEntityInvincible(ped, Config.InvinciblePeds)
-    SetBlockingOfNonTemporaryEvents(ped, true)
-    SetEntityCollision(ped, true, true)
-    -- ✅ Do NOT freeze yet — anim needs to play first
-    SetPedFleeAttributes(ped, 0, false)
-    SetPedCombatAttributes(ped, 17, true)
-    SetPedCombatAttributes(ped, 46, true)
-    SetPedConfigFlag(ped, 17, true)
-    SetPedConfigFlag(ped, 24, true)
-    SetPedConfigFlag(ped, 120, true)
-    SetPedConfigFlag(ped, 122, true)
-    SetPedConfigFlag(ped, 166, true)
-    SetPedConfigFlag(ped, 281, true)
-    TaskSetBlockingOfNonTemporaryEvents(ped, true)
-    SetPedCanRagdoll(ped, false)
-    SetModelAsNoLongerNeeded(model)
-
-    CreateThread(function()
-        Wait(Config.Performance.skinApplyDelay)
-        if not DoesEntityExist(ped) or not spawnedPeds[identifier] then return end
-
-        local skinJson = lib.callback.await('rde_sleepmod:getSkinData', false, identifier)
-        if skinJson then
-            ApplySkin(ped, skinJson)
-            if spawnedPeds[identifier] then spawnedPeds[identifier].skinApplied = true end
-        end
-
-        -- ✅ FIX: illenium-appearance clears ped tasks — need longer delay before anim
-        Wait(500)
-        if not DoesEntityExist(ped) then return end
-
-        -- ✅ Play sleeping animation
-        if LoadAnimDict(Config.SleepingAnimation.dict) then
-            TaskPlayAnim(ped, Config.SleepingAnimation.dict, Config.SleepingAnimation.clip,
-                8.0, -8.0, -1, 1, 0, false, false, false)
-        end
-
-        -- ✅ Wait for animation to settle, then freeze (NO PlaceObjectOnGroundProperly!)
-        Wait(1000)
-        if DoesEntityExist(ped) then
-            FreezeEntityPosition(ped, true)
-        end
-
-        if spawnedPeds[identifier] and not spawnedPeds[identifier].targetSetup then
-            SetupTarget(ped, identifier)
-            spawnedPeds[identifier].targetSetup = true
-        end
-
-        Debug('Ped ready:', identifier, '| skin:', skinJson and 'YES' or 'NO')
-    end)
+local function InitializeDatabase()
+    MySQL.query([[
+        CREATE TABLE IF NOT EXISTS ]] .. Config.DatabaseTable .. [[ (
+            identifier VARCHAR(60) PRIMARY KEY,
+            charid INT DEFAULT NULL,
+            coords TEXT NOT NULL,
+            model INT NOT NULL,
+            skin LONGTEXT,
+            inventory LONGTEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+    ]])
+    Debug('Database table initialized')
 end
 
-local function DespawnSleepingPed(identifier)
-    local data = spawnedPeds[identifier]
-    if not data then return end
-    if data.entity and DoesEntityExist(data.entity) then
-        pcall(exports.ox_target.removeLocalEntity, exports.ox_target, data.entity)
-        DeleteEntity(data.entity)
-    end
-    spawnedPeds[identifier] = nil
+local function SaveToDB(identifier, data)
+    MySQL.insert([[
+        INSERT INTO ]] .. Config.DatabaseTable .. [[ 
+        (identifier, charid, coords, model, skin, inventory)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            charid = VALUES(charid),
+            coords = VALUES(coords),
+            model = VALUES(model),
+            skin = VALUES(skin),
+            inventory = VALUES(inventory),
+            updated_at = CURRENT_TIMESTAMP
+    ]], {
+        identifier,
+        data.charid,
+        data.coords,
+        data.model,
+        data.skin,
+        data.inventory
+    })
+end
+
+local function DeleteFromDB(identifier)
+    MySQL.query('DELETE FROM ' .. Config.DatabaseTable .. ' WHERE identifier = ?', {identifier})
+end
+
+local function LoadAllFromDB()
+    return MySQL.query.await('SELECT * FROM ' .. Config.DatabaseTable) or {}
 end
 
 -- ============================================
--- 🎯 OX_TARGET
+-- 🎨 SKIN: Load from playerskins table
+-- ✅ FIXED: Filter by active = 1 to get correct skin
 -- ============================================
 
-function SetupTarget(entity, identifier)
-    if not DoesEntityExist(entity) then return end
+local function LoadSkinFromDB(charid)
+    if not charid or charid <= 0 then
+        Debug('LoadSkinFromDB: Invalid charid:', charid)
+        return nil
+    end
 
-    local options = {
-        {
-            name = 'rde_sleep_rob_' .. identifier,
-            icon = Config.TargetIcons.rob,
-            label = GetLanguageString('rob_player'),
-            distance = Config.TargetDistance,
-            onSelect = function() RobSleepingPlayer(entity, identifier) end,
-        },
-        {
-            name = 'rde_sleep_carry_' .. identifier,
-            icon = Config.TargetIcons.carry,
-            label = GetLanguageString('carry_player'),
-            distance = Config.TargetDistance,
-            canInteract = function() return not isCarrying end,
-            onSelect = function() StartCarrying(entity, identifier) end,
-        },
+    -- ✅ Get ACTIVE skin first
+    local result = MySQL.single.await(
+        'SELECT skin FROM playerskins WHERE citizenid = ? AND active = 1 LIMIT 1',
+        {charid}
+    )
+
+    -- Fallback: if no active skin, get latest
+    if not result or not result.skin then
+        result = MySQL.single.await(
+            'SELECT skin FROM playerskins WHERE citizenid = ? ORDER BY id DESC LIMIT 1',
+            {charid}
+        )
+    end
+
+    if result and result.skin then
+        Debug('Loaded skin from playerskins for charid:', charid)
+        return result.skin
+    end
+
+    Debug('No skin found in playerskins for charid:', charid)
+    return nil
+end
+
+-- ============================================
+-- 🎮 SLEEPING ENTRY MANAGEMENT
+-- ============================================
+
+local function CreateSleepingEntry(source, data)
+    local stateId, charId, player = GetPlayerData(source)
+    if not stateId then return end
+
+    Debug('CreateSleepingEntry: stateId=' .. tostring(stateId) .. ' charId=' .. tostring(charId))
+
+    -- ✅ Load skin from playerskins using charId
+    local skin = LoadSkinFromDB(charId)
+
+    -- Collect inventory
+    local inventoryData = {}
+    local ok, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, source)
+    if ok and inventory and inventory.items then
+        for _, item in pairs(inventory.items) do
+            if item.count and item.count > 0 then
+                inventoryData[#inventoryData + 1] = {
+                    name = item.name,
+                    count = item.count,
+                    slot = item.slot,
+                    metadata = item.metadata
+                }
+            end
+        end
+    end
+
+    local entry = {
+        coords = data.coords,
+        model = data.model,
+        charid = charId,
+        skin = skin,
+        inventory = json.encode(inventoryData),
     }
 
-    if isAdmin then
-        options[#options + 1] = {
-            name = 'rde_sleep_wake_' .. identifier,
-            icon = Config.TargetIcons.wake,
-            label = GetLanguageString('wake_player'),
-            distance = Config.TargetDistance,
-            onSelect = function() TriggerServerEvent('rde_sleepmod:wakePlayer', identifier) end,
-        }
+    sleepingPlayers[stateId] = entry
+    SaveToDB(stateId, entry)
+    SyncGlobalState()
+
+    Debug('Created sleeping entry for:', player.name,
+        '| stateId:', stateId,
+        '| charId:', charId,
+        '| skin:', skin and 'YES' or 'NO')
+end
+
+local function RemoveSleepingEntry(identifier)
+    if not sleepingPlayers[identifier] then return end
+
+    sleepingPlayers[identifier] = nil
+    DeleteFromDB(identifier)
+
+    if activeStashes[identifier] then
+        pcall(exports.ox_inventory.RemoveInventory, exports.ox_inventory, 'sleeping_' .. identifier)
+        activeStashes[identifier] = nil
     end
 
-    exports.ox_target:addLocalEntity(entity, options)
+    SyncGlobalState()
+    Debug('Removed sleeping entry:', identifier)
 end
 
 -- ============================================
--- 🔫 ROBBERY
+-- 📦 STASH
 -- ============================================
 
-function RobSleepingPlayer(entity, identifier)
-    if not DoesEntityExist(entity) then return end
-    if #(GetEntityCoords(entity) - GetEntityCoords(cache.ped)) > Config.RobDistance then
-        lib.notify({ title = GetLanguageString('error'), description = GetLanguageString('too_far'), type = 'error' })
-        return
+local function RegisterStash(identifier)
+    local data = sleepingPlayers[identifier]
+    if not data then return false end
+
+    local stashId = 'sleeping_' .. identifier
+
+    -- ✅ If stash already registered and populated, just return true
+    if activeStashes[identifier] then
+        return true
     end
 
-    local success = lib.progressBar({
-        duration = Config.RobDuration,
-        label = GetLanguageString('searching_pockets'),
-        useWhileDead = false, canCancel = true,
-        disable = { car = true, move = true, combat = true },
-        anim = { dict = Config.RobAnimation.dict, clip = Config.RobAnimation.clip },
-    })
+    local ok = pcall(exports.ox_inventory.RegisterStash, exports.ox_inventory,
+        stashId, 'Sleeping Player', Config.MaxSlots, Config.MaxWeight)
+    if not ok then return false end
 
-    if success then
-        local registered = lib.callback.await('rde_sleepmod:registerStash', false, identifier)
-        if registered then
-            exports.ox_inventory:openInventory('stash', 'sleeping_' .. identifier)
-            lib.notify({ title = GetLanguageString('success'), description = GetLanguageString('inventory_opened'), type = 'success' })
-        else
-            lib.notify({ title = GetLanguageString('error'), description = GetLanguageString('inventory_failed'), type = 'error' })
-        end
-    end
-end
-
--- ============================================
--- 🏃 CARRYING
--- ============================================
-
-function StartCarrying(entity, identifier)
-    if not DoesEntityExist(entity) or isCarrying then
-        if isCarrying then
-            lib.notify({ title = GetLanguageString('warning'), description = GetLanguageString('already_carrying'), type = 'warning' })
-        end
-        return
-    end
-
-    local playerPed = cache.ped
-    local initCoords = GetEntityCoords(entity)
-    local initHeading = GetEntityHeading(entity)
-
-    isCarrying = true
-    carriedEntity = entity
-    carriedIdentifier = identifier
-
-    FreezeEntityPosition(entity, false)
-    LoadAnimDict(Config.CarryAnimation.carrier.dict)
-    LoadAnimDict(Config.CarryAnimation.carried.dict)
-
-    TaskPlayAnim(entity, Config.CarryAnimation.carried.dict, Config.CarryAnimation.carried.clip,
-        8.0, -8.0, -1, 33, 0, false, false, false)
-    AttachEntityToEntity(entity, playerPed, 0,
-        Config.CarryOffset.x, Config.CarryOffset.y, Config.CarryOffset.z,
-        Config.CarryOffset.pitch, Config.CarryOffset.roll, Config.CarryOffset.yaw,
-        false, false, false, false, 2, true)
-    TaskPlayAnim(playerPed, Config.CarryAnimation.carrier.dict, Config.CarryAnimation.carrier.clip,
-        8.0, -8.0, -1, 49, 0, false, false, false)
-
-    lib.notify({ title = GetLanguageString('success'), description = GetLanguageString('player_carried'), type = 'success' })
-    lib.showTextUI(GetLanguageString('press_release'), { position = 'right-center' })
-
-    CreateThread(function()
-        while isCarrying and DoesEntityExist(entity) and DoesEntityExist(playerPed) do
-            if IsControlJustPressed(0, 38) or IsEntityDead(playerPed) then
-                StopCarrying(entity, initCoords, initHeading)
-                break
-            end
-            Wait(0)
-        end
-    end)
-end
-
-function StopCarrying(entity, origCoords, origHeading)
-    if not isCarrying or not DoesEntityExist(entity) then return end
-
-    local playerPed = cache.ped
-    local coords = GetEntityCoords(playerPed)
-
-    ClearPedTasksImmediately(entity)
-    ClearPedTasksImmediately(playerPed)
-    DetachEntity(entity, true, true)
-
-    local fwd = GetEntityForwardVector(playerPed)
-    local x, y = coords.x + fwd.x * 1.5, coords.y + fwd.y * 1.5
-    local found, z = GetGroundZFor_3dCoord(x, y, coords.z + 5.0, false)
-    if not found then x, y, z = origCoords.x, origCoords.y, origCoords.z end
-
-    SetEntityCoordsNoOffset(entity, x, y, z, false, false, false)
-    SetEntityHeading(entity, GetEntityHeading(playerPed))
-    SetEntityCollision(entity, true, true)
-
-    -- ✅ Play anim BEFORE freezing
-    if LoadAnimDict(Config.SleepingAnimation.dict) then
-        TaskPlayAnim(entity, Config.SleepingAnimation.dict, Config.SleepingAnimation.clip,
-            8.0, -8.0, -1, 1, 0, false, false, false)
-    end
-    
-    Wait(1000)
-    FreezeEntityPosition(entity, true)
-
-    -- ✅ Send actual final coords
-    local finalCoords = GetEntityCoords(entity)
-    TriggerServerEvent('rde_sleepmod:updatePosition', carriedIdentifier,
-        { x = finalCoords.x, y = finalCoords.y, z = finalCoords.z, w = GetEntityHeading(entity) })
-
-    lib.hideTextUI()
-    lib.notify({ title = GetLanguageString('success'), description = GetLanguageString('player_released'), type = 'success' })
-
-    isCarrying = false
-    carriedEntity = nil
-    carriedIdentifier = nil
-end
-
--- ============================================
--- 📡 PROXIMITY LOADING LOOP
--- ============================================
-
-CreateThread(function()
-    while not cache.ped do Wait(500) end
-    playerReady = true
-
-    isAdmin = lib.callback.await('rde_sleepmod:isAdmin', false) or false
-    Debug('Player ready | admin:', isAdmin)
-
-    while true do
-        Wait(Config.Performance.proximityTick)
-
-        local sleepData = GlobalState.sleepingPlayers
-        if not sleepData or not next(sleepData) then
-            for id in pairs(spawnedPeds) do DespawnSleepingPed(id) end
-            goto continue
-        end
-
-        local playerCoords = GetEntityCoords(cache.ped)
-        local visibleCount = 0
-
-        for identifier, data in pairs(sleepData) do
-            local dist = #(playerCoords - vector3(data.x, data.y, data.z))
-
-            if dist <= Config.Performance.renderDistance then
-                if not spawnedPeds[identifier] and visibleCount < Config.Performance.maxVisiblePeds then
-                    SpawnSleepingPed(identifier, data)
+    -- ✅ Only add items on FIRST registration
+    if data.inventory then
+        local items = type(data.inventory) == 'string' and json.decode(data.inventory) or data.inventory
+        if items then
+            for _, item in pairs(items) do
+                if item.count and item.count > 0 then
+                    pcall(exports.ox_inventory.AddItem, exports.ox_inventory,
+                        stashId, item.name, item.count, item.metadata, item.slot)
                 end
-                visibleCount = visibleCount + 1
-            elseif dist > Config.Performance.despawnDistance and spawnedPeds[identifier] then
-                DespawnSleepingPed(identifier)
             end
         end
-
-        for identifier in pairs(spawnedPeds) do
-            if not sleepData[identifier] then
-                DespawnSleepingPed(identifier)
-            end
-        end
-
-        ::continue::
     end
-end)
 
--- ============================================
--- 🎯 PLAYER EVENTS
--- ============================================
+    activeStashes[identifier] = true
+    return true
+end
 
-RegisterNetEvent('ox:playerLoaded', function()
-    Debug('ox:playerLoaded')
+-- ✅ Sync stash contents back to DB (called periodically and on player reconnect)
+local function SyncStashToDB(identifier)
+    if not activeStashes[identifier] then return end
 
-    SetTimeout(10000, function()
-        local ped = cache.ped
-        if ped and DoesEntityExist(ped) then
-            TriggerServerEvent('rde_sleepmod:saveAppearanceCache', {
-                coords = json.encode(vector4(GetEntityCoords(ped), GetEntityHeading(ped))),
-                model = GetEntityModel(ped),
-            })
-        end
-    end)
-end)
+    local stashId = 'sleeping_' .. identifier
+    local ok, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, stashId)
+    if not ok or not inventory then return end
 
-RegisterNetEvent('ox:playerLogout', function()
-    local ped = cache.ped
-    if not ped then return end
-    TriggerServerEvent('rde_sleepmod:createSleepingPed', {
-        coords = json.encode(vector4(GetEntityCoords(ped), GetEntityHeading(ped))),
-        model = GetEntityModel(ped),
-    })
-end)
-
--- ✅ FIX: Teleport player to sleeping ped position on reconnect
--- (if someone carried the sleeper, player spawns at new location)
-RegisterNetEvent('rde_sleepmod:teleportToSleepPos', function(x, y, z, w)
-    CreateThread(function()
-        local ped = cache.ped
-        if not ped or not DoesEntityExist(ped) then
-            -- Wait for ped
-            local timeout = 0
-            while (not ped or not DoesEntityExist(ped)) and timeout < 100 do
-                Wait(100)
-                ped = cache.ped
-                timeout = timeout + 1
+    local items = {}
+    if inventory.items then
+        for _, item in pairs(inventory.items) do
+            if item.count and item.count > 0 then
+                items[#items + 1] = {
+                    name = item.name,
+                    count = item.count,
+                    slot = item.slot,
+                    metadata = item.metadata,
+                }
             end
         end
-        if not ped or not DoesEntityExist(ped) then return end
+    end
 
-        local currentCoords = GetEntityCoords(ped)
-        local targetCoords = vector3(x, y, z)
-        local dist = #(currentCoords - targetCoords)
+    local inv = json.encode(items)
 
-        -- Only teleport if > 5m from sleeping position
-        if dist > 5.0 then
-            DoScreenFadeOut(500)
-            Wait(500)
-            SetEntityCoords(ped, x, y, z, false, false, false, false)
-            SetEntityHeading(ped, w or 0.0)
-            PlaceObjectOnGroundProperly(ped)
-            Wait(300)
-            DoScreenFadeIn(500)
-            Debug(('Teleported to sleeping position: %.1f, %.1f, %.1f (was %.1f away)'):format(x, y, z, dist))
+    -- Update in-memory
+    if sleepingPlayers[identifier] then
+        sleepingPlayers[identifier].inventory = inv
+    end
+
+    -- Update DB
+    MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET inventory = ? WHERE identifier = ?', {inv, identifier})
+    Debug('Synced stash to DB for:', identifier)
+end
+
+-- ============================================
+-- 📞 CALLBACKS
+-- ============================================
+
+lib.callback.register('rde_sleepmod:registerStash', function(source, identifier)
+    return RegisterStash(identifier)
+end)
+
+lib.callback.register('rde_sleepmod:isAdmin', function(source)
+    return IsPlayerAdmin(source)
+end)
+
+lib.callback.register('rde_sleepmod:getSkinData', function(source, identifier)
+    local data = sleepingPlayers[identifier]
+    if not data then return nil end
+
+    -- If skin is cached in sleepingPlayers, return it
+    if data.skin then return data.skin end
+
+    -- Fallback: try loading from playerskins
+    if data.charid and data.charid > 0 then
+        local skin = LoadSkinFromDB(data.charid)
+        if skin then
+            data.skin = skin
+            -- Update DB cache too
+            MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET skin = ? WHERE identifier = ?', {skin, identifier})
+            return skin
         end
+    end
+
+    return nil
+end)
+
+-- ============================================
+-- 🎯 EVENTS
+-- ============================================
+
+AddEventHandler('ox:playerLoaded', function(source, userid, charid)
+    -- ✅ Cache immediately (before SetTimeout) so playerDropped can use it
+    if source and source > 0 then
+        local player = Ox.GetPlayer(source)
+        if player and player.stateId then
+            playerCache[source] = { stateId = player.stateId, charId = player.charId or charid }
+            Debug('Cached player data for source:', source, '| stateId:', player.stateId, '| charId:', player.charId or charid)
+            
+            -- ✅ FIX: Immediately remove from memory if exists
+            if sleepingPlayers[player.stateId] then
+                Debug('ox:playerLoaded: Found sleeping entry in memory, scheduling removal:', player.stateId)
+            end
+        end
+    end
+
+    SetTimeout(5000, function()
+        if not source or source <= 0 then return end
+        local stateId, playerCharId, player = GetPlayerData(source)
+        
+        -- ✅ FIX: If no stateId from Ox, try to find by charId in DB
+        if not stateId and charid and charid > 0 then
+            local dbEntry = MySQL.single.await(
+                'SELECT identifier FROM ' .. Config.DatabaseTable .. ' WHERE charid = ?',
+                {charid}
+            )
+            if dbEntry then
+                stateId = dbEntry.identifier
+                Debug('Found sleeping entry by charId fallback:', stateId)
+            end
+        end
+        
+        if not stateId then
+            Debug('ox:playerLoaded: No stateId found for source:', source)
+            return
+        end
+        
+        -- ✅ FIX: Always clean up DB entry on login
+        if not sleepingPlayers[stateId] then
+            DeleteFromDB(stateId)
+            Debug('ox:playerLoaded: Cleaned orphan DB entry for:', stateId)
+            return
+        end
+
+        local sleepData = sleepingPlayers[stateId]
+        Debug('Player reconnected:', stateId)
+
+        -- ✅ FIX: Update characters table with sleeping ped position
+        -- So if someone carried the sleeper, the player spawns at the new location
+        local coords = sleepData.coords and json.decode(sleepData.coords)
+        if coords and playerCharId then
+            -- Update characters table x, y, z, heading
+            MySQL.update([[
+                UPDATE characters SET x = ?, y = ?, z = ?, heading = ? WHERE charid = ?
+            ]], { coords.x, coords.y, coords.z, coords.w or 0.0, playerCharId })
+
+            -- ✅ Teleport player to sleeping ped position (they may have spawned at old coords)
+            TriggerClientEvent('rde_sleepmod:teleportToSleepPos', source, coords.x, coords.y, coords.z, coords.w or 0.0)
+
+            Debug(('Updated characters spawn pos for charid %d: %.1f, %.1f, %.1f'):format(
+                playerCharId, coords.x, coords.y, coords.z
+            ))
+        end
+
+        -- ✅ If stash was accessed (robbery happened), calculate what was stolen
+        if activeStashes[stateId] then
+            local stashId = 'sleeping_' .. stateId
+
+            -- Get original snapshot (what they had when they disconnected)
+            local originalItems = {}
+            local origData = sleepData.inventory
+            if origData then
+                local parsed = type(origData) == 'string' and json.decode(origData) or origData
+                if parsed then
+                    for _, item in pairs(parsed) do
+                        originalItems[item.name] = (originalItems[item.name] or 0) + item.count
+                    end
+                end
+            end
+
+            -- Get what's LEFT in the stash now
+            local remainingItems = {}
+            local ok, stashInv = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, stashId)
+            if ok and stashInv and stashInv.items then
+                for _, item in pairs(stashInv.items) do
+                    if item.count and item.count > 0 then
+                        remainingItems[item.name] = (remainingItems[item.name] or 0) + item.count
+                    end
+                end
+            end
+
+            -- Calculate stolen: original - remaining = stolen
+            for itemName, originalCount in pairs(originalItems) do
+                local remaining = remainingItems[itemName] or 0
+                local stolen = originalCount - remaining
+                if stolen > 0 then
+                    -- ✅ Remove stolen items from the player's actual inventory
+                    pcall(exports.ox_inventory.RemoveItem, exports.ox_inventory,
+                        source, itemName, stolen)
+                    Debug('Removed stolen item from player:', itemName, 'x' .. stolen)
+                end
+            end
+        end
+
+        RemoveSleepingEntry(stateId)
     end)
+end)
+
+AddEventHandler('playerDropped', function(reason)
+    local src = source
+
+    -- ✅ Get data BEFORE player object disappears
+    local stateId, charId, player = GetPlayerData(src)
+
+    SetTimeout(500, function()
+        if not stateId then
+            Debug('playerDropped: No stateId for source:', src)
+            return
+        end
+        if sleepingPlayers[stateId] then
+            Debug('playerDropped: Entry already exists for:', stateId)
+            return
+        end
+
+        -- Use cached data from DB (saved by auto-save)
+        local cached = MySQL.single.await(
+            'SELECT * FROM ' .. Config.DatabaseTable .. ' WHERE identifier = ?',
+            {stateId}
+        )
+
+        if cached then
+            -- If skin was NULL in cache, try loading it now
+            local skin = cached.skin
+            if not skin and cached.charid and cached.charid > 0 then
+                skin = LoadSkinFromDB(cached.charid)
+            end
+            -- If still no skin and we have charId from before drop
+            if not skin and charId and charId > 0 then
+                skin = LoadSkinFromDB(charId)
+            end
+
+            sleepingPlayers[stateId] = {
+                coords = cached.coords,
+                model = cached.model,
+                charid = cached.charid or charId,
+                skin = skin,
+                inventory = cached.inventory,
+            }
+
+            -- Update skin in DB if we loaded it
+            if skin and not cached.skin then
+                MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET skin = ? WHERE identifier = ?', {skin, stateId})
+            end
+
+            SyncGlobalState()
+            Debug('playerDropped: Activated sleeping entry from cache:', stateId, '| skin:', skin and 'YES' or 'NO')
+        else
+            -- ✅ FIX: No cache exists (first disconnect or table was dropped)
+            -- Build sleeping entry directly from characters + playerskins tables
+            if charId and charId > 0 then
+                Debug('playerDropped: No cache — building from characters/playerskins for charId:', charId)
+
+                local charData = MySQL.single.await(
+                    'SELECT x, y, z, heading FROM characters WHERE charid = ?',
+                    {charId}
+                )
+
+                if charData then
+                    local skin = LoadSkinFromDB(charId)
+                    local model = joaat('mp_m_freemode_01') -- Default model
+
+                    -- Try to get model from playerskins
+                    local skinResult = MySQL.single.await(
+                        'SELECT skin FROM playerskins WHERE citizenid = ? AND active = 1 LIMIT 1',
+                        {charId}
+                    )
+                    if skinResult and skinResult.skin then
+                        local ok, parsed = pcall(json.decode, skinResult.skin)
+                        if ok and parsed and parsed.model then
+                            model = type(parsed.model) == 'string' and joaat(parsed.model) or parsed.model
+                        end
+                    end
+
+                    -- Get inventory
+                    local inventoryData = {}
+                    local invOk, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, src)
+                    if invOk and inventory and inventory.items then
+                        for _, item in pairs(inventory.items) do
+                            if item.count and item.count > 0 then
+                                inventoryData[#inventoryData + 1] = {
+                                    name = item.name,
+                                    count = item.count,
+                                    slot = item.slot,
+                                    metadata = item.metadata,
+                                }
+                            end
+                        end
+                    end
+
+                    local coords = json.encode({
+                        x = charData.x, y = charData.y, z = charData.z,
+                        w = charData.heading or 0.0
+                    })
+
+                    local entry = {
+                        coords = coords,
+                        model = model,
+                        charid = charId,
+                        skin = skin,
+                        inventory = json.encode(inventoryData),
+                    }
+
+                    sleepingPlayers[stateId] = entry
+                    SaveToDB(stateId, entry)
+                    SyncGlobalState()
+
+                    Debug('playerDropped: Created sleeping entry from characters table:', stateId, '| skin:', skin and 'YES' or 'NO')
+                else
+                    Debug('playerDropped: No character data found for charId:', charId)
+                end
+            else
+                Debug('playerDropped: No cache AND no charId for:', stateId)
+            end
+        end
+
+        -- ✅ Clean up player cache after processing
+        playerCache[src] = nil
+    end)
+end)
+
+RegisterNetEvent('rde_sleepmod:createSleepingPed', function(data)
+    CreateSleepingEntry(source, data)
+end)
+
+-- ✅ Auto-save: saves skin from playerskins into rde_sleepmod cache
+RegisterNetEvent('rde_sleepmod:saveAppearanceCache', function(data)
+    local src = source
+    local stateId, charId, player = GetPlayerData(src)
+    if not stateId or not charId then return end
+
+    -- ✅ Load skin from playerskins
+    local skin = LoadSkinFromDB(charId)
+
+    local inventoryData = {}
+    local ok, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, src)
+    if ok and inventory and inventory.items then
+        for _, item in pairs(inventory.items) do
+            if item.count and item.count > 0 then
+                inventoryData[#inventoryData + 1] = {
+                    name = item.name,
+                    count = item.count,
+                    slot = item.slot,
+                    metadata = item.metadata
+                }
+            end
+        end
+    end
+
+    SaveToDB(stateId, {
+        coords = data.coords,
+        model = data.model,
+        charid = charId,
+        skin = skin,
+        inventory = json.encode(inventoryData),
+    })
+
+    Debug('Cache saved for:', stateId, '| charId:', charId, '| skin:', skin and 'YES' or 'NO')
+end)
+
+RegisterNetEvent('rde_sleepmod:updatePosition', function(identifier, newCoords)
+    local data = sleepingPlayers[identifier]
+    if not data then return end
+    data.coords = json.encode(newCoords)
+    MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET coords = ? WHERE identifier = ?', {data.coords, identifier})
+
+    -- ✅ FIX: Also update characters table so player spawns at new position
+    if data.charid and data.charid > 0 then
+        MySQL.update([[
+            UPDATE characters SET x = ?, y = ?, z = ?, heading = ? WHERE charid = ?
+        ]], { newCoords.x, newCoords.y, newCoords.z, newCoords.w or 0.0, data.charid })
+        Debug(('Updated characters spawn pos for sleeper %s (charid %d)'):format(identifier, data.charid))
+    end
+
+    SyncGlobalState()
+end)
+
+RegisterNetEvent('rde_sleepmod:wakePlayer', function(identifier)
+    local src = source
+    if not IsPlayerAdmin(src) then
+        TriggerClientEvent('ox_lib:notify', src, {
+            title = GetLanguageString('error'),
+            description = GetLanguageString('no_permission'),
+            type = 'error'
+        })
+        return
+    end
+    RemoveSleepingEntry(identifier)
+    TriggerClientEvent('ox_lib:notify', src, {
+        title = GetLanguageString('success'),
+        description = GetLanguageString('player_woken'),
+        type = 'success'
+    })
 end)
 
 -- ============================================
@@ -512,66 +683,83 @@ end)
 
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
-    if isCarrying and carriedEntity then
-        StopCarrying(carriedEntity, GetEntityCoords(carriedEntity), GetEntityHeading(carriedEntity))
+    for id in pairs(activeStashes) do
+        pcall(exports.ox_inventory.RemoveInventory, exports.ox_inventory, 'sleeping_' .. id)
     end
-    for id in pairs(spawnedPeds) do DespawnSleepingPed(id) end
-    lib.hideTextUI()
+    GlobalState.sleepingPlayers = nil
 end)
 
 -- ============================================
--- 🚀 AUTO-SAVE (every 5 min)
+-- 🚀 INIT
 -- ============================================
 
-CreateThread(function()
-    while true do
-        Wait(300000)
-        local ped = cache.ped
-        if ped and DoesEntityExist(ped) then
-            TriggerServerEvent('rde_sleepmod:saveAppearanceCache', {
-                coords = json.encode(vector4(GetEntityCoords(ped), GetEntityHeading(ped))),
-                model = GetEntityModel(ped),
-            })
-            Debug('Auto-saved cache')
+MySQL.ready(function()
+    if Config.AutoCreateTable then InitializeDatabase() end
+
+    Wait(2000)
+
+    local dbEntries = LoadAllFromDB()
+    for _, entry in ipairs(dbEntries) do
+        -- ✅ If skin is NULL, try loading from playerskins now
+        local skin = entry.skin
+        if not skin and entry.charid and entry.charid > 0 then
+            skin = LoadSkinFromDB(entry.charid)
+            if skin then
+                MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET skin = ? WHERE identifier = ?', {skin, entry.identifier})
+                Debug('Backfilled skin for:', entry.identifier)
+            end
         end
+
+        sleepingPlayers[entry.identifier] = {
+            coords = entry.coords,
+            model = entry.model,
+            charid = entry.charid,
+            skin = skin,
+            inventory = entry.inventory,
+        }
     end
+
+    SyncGlobalState()
+    Debug('Server initialized with', #dbEntries, 'sleeping players')
+
+    -- ✅ FIX: Robust cleanup for players who are already online
+    -- Runs multiple times with increasing delays because Ox.GetPlayer
+    -- might not be ready for all players immediately after script restart
+    local function CleanupOnlinePlayers()
+        local cleaned = 0
+        local players = GetPlayers()
+        for _, playerId in ipairs(players) do
+            local src = tonumber(playerId)
+            if src and src > 0 then
+                local stateId = select(1, GetPlayerData(src))
+                if stateId and sleepingPlayers[stateId] then
+                    Debug('Init cleanup: Removing sleeping entry for online player:', stateId)
+                    RemoveSleepingEntry(stateId)
+                    cleaned = cleaned + 1
+                end
+            end
+        end
+        return cleaned
+    end
+
+    -- Try cleanup at 3s, 8s, and 15s after init
+    Wait(3000)
+    local c1 = CleanupOnlinePlayers()
+    Debug('Init cleanup pass 1:', c1, 'entries removed')
+
+    Wait(5000)
+    local c2 = CleanupOnlinePlayers()
+    Debug('Init cleanup pass 2:', c2, 'entries removed')
+
+    Wait(7000)
+    local c3 = CleanupOnlinePlayers()
+    Debug('Init cleanup pass 3:', c3, 'entries removed')
 end)
-
--- ============================================
--- 🎮 COMMANDS
--- ============================================
-
-RegisterCommand('sleeplogout', function()
-    local ped = cache.ped
-    if not ped then return end
-    TriggerServerEvent('rde_sleepmod:createSleepingPed', {
-        coords = json.encode(vector4(GetEntityCoords(ped), GetEntityHeading(ped))),
-        model = GetEntityModel(ped),
-    })
-    lib.notify({ title = GetLanguageString('success'), description = 'Sleeping...', type = 'success' })
-    Wait(1000)
-    TriggerEvent('ox:playerLogout')
-end, false)
-
-if Config.Debug then
-    RegisterCommand('sleeptest', function()
-        local s, g = 0, 0
-        for _ in pairs(spawnedPeds) do s = s + 1 end
-        local data = GlobalState.sleepingPlayers
-        if data then for _ in pairs(data) do g = g + 1 end end
-        print(('[RDE SLEEPMOD] Spawned: %d | GlobalState: %d'):format(s, g))
-    end, false)
-end
 
 -- ============================================
 -- 📤 EXPORTS
 -- ============================================
 
-exports('IsClone', function(entity)
-    for _, d in pairs(spawnedPeds) do if d.entity == entity then return true end end
-    return false
-end)
-exports('IsSleepingClone', function(entity)
-    for _, d in pairs(spawnedPeds) do if d.entity == entity then return true end end
-    return false
-end)
+exports('GetSleepingPlayer', function(id) return sleepingPlayers[id] end)
+exports('GetAllSleepingPlayers', function() return sleepingPlayers end)
+exports('RemoveSleepingPlayer', function(id) RemoveSleepingEntry(id) end)
