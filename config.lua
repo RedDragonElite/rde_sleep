@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CONFIG v1.0.2
+-- 🐉 RDE SLEEPMOD - CONFIG v1.1.0
 -- Proximity Loading | Statebag Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -49,7 +49,7 @@ end
 -- ⚙️ PERFORMANCE & PROXIMITY
 -- ============================================
 
-Config.Debug = true -- ← Set false in production!
+Config.Debug = false -- Set true for verbose console output
 
 Config.Performance = {
     renderDistance  = 200.0,
@@ -120,5 +120,9 @@ Config.TargetIcons = {
 
 Config.DatabaseTable = 'rde_sleepmod'
 Config.AutoCreateTable = true
+
+-- ✅ Column name in your playerskins table that maps to ox_core charId
+-- Most setups use 'citizenid', some use 'charid' — check your DB
+Config.PlayerSkinsColumn = 'citizenid'
 
 return Config

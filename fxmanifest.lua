@@ -5,7 +5,7 @@ lua54 'yes'
 name 'rde_sleepmod'
 author 'Red Dragon Elite | SerpentsByte'
 description 'Next-Gen Sleep System - Proximity Loading | GlobalState Sync | ox_core'
-version '1.0.0'
+version '1.1.0'
 
 dependencies {
     '/server:7290',

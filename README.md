@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.0.2-red?style=for-the-badge&logo=github)
+![Version](https://img.shields.io/badge/version-1.1.0-red?style=for-the-badge&logo=github)
 ![License](https://img.shields.io/badge/license-RDE%20Black%20Flag%20v6.66-black?style=for-the-badge)
 ![FiveM](https://img.shields.io/badge/FiveM-Compatible-orange?style=for-the-badge)
 ![ox_core](https://img.shields.io/badge/ox__core-Required-blue?style=for-the-badge)
@@ -208,6 +208,14 @@ Config.TargetIcons = {
 }
 ```
 
+### Database / Skin
+
+```lua
+Config.DatabaseTable      = 'rde_sleepmod'
+Config.AutoCreateTable    = true
+Config.PlayerSkinsColumn  = 'citizenid'  -- Column in playerskins table (some use 'charid')
+```
+
 ---
 
 ## 🎮 How It Works
@@ -320,7 +328,7 @@ CREATE TABLE rde_sleepmod (
 );
 ```
 
-**Skin data** is loaded from the `playerskins` table (column `citizenid`) and cached in `rde_sleepmod.skin` for persistence across server restarts.
+**Skin data** is loaded from the `playerskins` table using the column configured in `Config.PlayerSkinsColumn` (default: `citizenid`) and cached in `rde_sleepmod.skin` for persistence across server restarts.
 
 ---
 
@@ -358,7 +366,7 @@ CREATE TABLE rde_sleepmod (
 ## 🐛 Troubleshooting
 
 **Skin not showing on sleeping ped?**
-Check your `playerskins` table column name — the script queries `citizenid`. If your table uses a different column name, update the query in `server.lua` function `LoadSkinFromDB`. Enable `Config.Debug = true` and check console for `skin: YES/NO` messages.
+Check `Config.PlayerSkinsColumn` in `config.lua` — it must match the column name in your `playerskins` table (usually `citizenid` or `charid`). Also verify the `active` column exists. Enable `Config.Debug = true` and check console for `skin: YES/NO` messages.
 
 **Sleeping peds not visible after server restart?**
 The script loads all sleeping entries from MySQL on start and syncs via GlobalState. If peds don't appear, check that `oxmysql` starts before `rde_sleepmod` in your `server.cfg`.
@@ -388,7 +396,21 @@ Admin status is checked once on player load. If you change admin groups, the pla
 
 ## 📝 Changelog
 
-### v1.0.0 — Current
+### v1.1.0 — Current
+- Fixed: Ox.GetPlayer() always returns object — now checks player.charId (per ox_core docs)
+- Fixed: player.getGroups() call syntax with proper type checking
+- Fixed: GlobalState can't be set to nil — uses empty table on resource stop
+- Fixed: exports.ox_inventory calls use documented colon syntax
+- Fixed: playerskins column name now configurable via Config.PlayerSkinsColumn
+- Fixed: Input validation on createSleepingPed NetEvent (prevents spam)
+- Fixed: Admin check runs per-target instead of once at init (race condition fix)
+- Fixed: Carry-drop no longer uses GetGroundZFor_3dCoord (caused roof placement in interiors)
+- Fixed: Spawn position uses exact stored Z (no compounding drift)
+- Fixed: Online players cleaned from DB on script restart (3-pass cleanup)
+- Fixed: Config.Debug defaults to false for production
+- Fixed: Version numbers synced across all files
+
+### v1.0.0
 - Proximity-loaded sleeping peds (rde_props pattern)
 - GlobalState sync — zero network events
 - Full skin sync from `playerskins` table
@@ -423,7 +445,7 @@ Guidelines: follow existing Lua conventions, comment complex logic, test on a li
 #                                                                                 #
 #      .:: RED DRAGON ELITE (RDE)  -  BLACK FLAG SOURCE LICENSE v6.66 ::.         #
 #                                                                                 #
-#   PROJECT:    RDE_SLEEPMOD v1.0.2 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
+#   PROJECT:    RDE_SLEEPMOD v1.1.0 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
 #   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com     #
 #   ORIGIN:     https://github.com/RedDragonElite                                 #
 #                                                                                 #

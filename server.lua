@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.0.2
+-- 🐉 RDE SLEEPMOD - SERVER v1.1.0
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -30,20 +30,21 @@ local function Debug(...)
     end
 end
 
---- ✅ ox_core uses charId (camelCase!) not charid
+--- ✅ ox_core: Ox.GetPlayer() always returns an object
+--- Check player.charId to verify character is loaded (nil = no character active)
 --- Also populates playerCache for use during playerDropped
 local function GetPlayerData(source)
     local player = Ox.GetPlayer(source)
-    if player then
+    if player and player.charId then
         local stateId = player.stateId
         local charId = player.charId
-        -- Cache it so playerDropped can use it later
+        -- Cache for playerDropped (player object unavailable after disconnect)
         if stateId then
             playerCache[source] = { stateId = stateId, charId = charId }
         end
         return stateId, charId, player
     end
-    -- Fallback: use cache if player object is already gone (during disconnect)
+    -- Fallback: use cache if player has no active character or is disconnected
     local cached = playerCache[source]
     if cached then
         return cached.stateId, cached.charId, nil
@@ -94,17 +95,20 @@ local function IsPlayerAdmin(source)
                 return true
             end
         elseif method == 'oxcore' then
+            -- ✅ ox_core: player.getGroups() returns table<string, number>
             local ok, groups = pcall(function()
                 return player.getGroups()
             end)
-            Debug('IsPlayerAdmin: ox_core groups check — ok:', ok, '| groups:', groups and json.encode(groups) or 'nil')
-            if ok and groups then
+            if ok and type(groups) == 'table' then
+                Debug('IsPlayerAdmin: ox_core groups:', json.encode(groups))
                 for groupName, minGrade in pairs(cfg.oxGroups) do
                     if groups[groupName] and groups[groupName] >= minGrade then
                         Debug('IsPlayerAdmin: PASS via oxcore group:', groupName, 'grade:', groups[groupName])
                         return true
                     end
                 end
+            else
+                Debug('IsPlayerAdmin: getGroups failed or returned non-table:', ok, type(groups))
             end
         elseif method == 'steam' then
             if identifier then
@@ -182,16 +186,18 @@ local function LoadSkinFromDB(charid)
         return nil
     end
 
+    local col = Config.PlayerSkinsColumn or 'citizenid'
+
     -- ✅ Get ACTIVE skin first
     local result = MySQL.single.await(
-        'SELECT skin FROM playerskins WHERE citizenid = ? AND active = 1 LIMIT 1',
+        ('SELECT skin FROM playerskins WHERE %s = ? AND active = 1 LIMIT 1'):format(col),
         {charid}
     )
 
     -- Fallback: if no active skin, get latest
     if not result or not result.skin then
         result = MySQL.single.await(
-            'SELECT skin FROM playerskins WHERE citizenid = ? ORDER BY id DESC LIMIT 1',
+            ('SELECT skin FROM playerskins WHERE %s = ? ORDER BY id DESC LIMIT 1'):format(col),
             {charid}
         )
     end
@@ -220,7 +226,7 @@ local function CreateSleepingEntry(source, data)
 
     -- Collect inventory
     local inventoryData = {}
-    local ok, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, source)
+    local ok, inventory = pcall(function() return exports.ox_inventory:GetInventory(source) end)
     if ok and inventory and inventory.items then
         for _, item in pairs(inventory.items) do
             if item.count and item.count > 0 then
@@ -259,7 +265,7 @@ local function RemoveSleepingEntry(identifier)
     DeleteFromDB(identifier)
 
     if activeStashes[identifier] then
-        pcall(exports.ox_inventory.RemoveInventory, exports.ox_inventory, 'sleeping_' .. identifier)
+        pcall(function() return exports.ox_inventory:RemoveInventory('sleeping_' .. identifier) end)
         activeStashes[identifier] = nil
     end
 
@@ -282,8 +288,9 @@ local function RegisterStash(identifier)
         return true
     end
 
-    local ok = pcall(exports.ox_inventory.RegisterStash, exports.ox_inventory,
-        stashId, 'Sleeping Player', Config.MaxSlots, Config.MaxWeight)
+    local ok = pcall(function()
+        return exports.ox_inventory:RegisterStash(stashId, 'Sleeping Player', Config.MaxSlots, Config.MaxWeight)
+    end)
     if not ok then return false end
 
     -- ✅ Only add items on FIRST registration
@@ -292,8 +299,9 @@ local function RegisterStash(identifier)
         if items then
             for _, item in pairs(items) do
                 if item.count and item.count > 0 then
-                    pcall(exports.ox_inventory.AddItem, exports.ox_inventory,
-                        stashId, item.name, item.count, item.metadata, item.slot)
+                    pcall(function()
+                        exports.ox_inventory:AddItem(stashId, item.name, item.count, item.metadata, item.slot)
+                    end)
                 end
             end
         end
@@ -308,7 +316,7 @@ local function SyncStashToDB(identifier)
     if not activeStashes[identifier] then return end
 
     local stashId = 'sleeping_' .. identifier
-    local ok, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, stashId)
+    local ok, inventory = pcall(function() return exports.ox_inventory:GetInventory(stashId) end)
     if not ok or not inventory then return end
 
     local items = {}
@@ -443,7 +451,7 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
 
             -- Get what's LEFT in the stash now
             local remainingItems = {}
-            local ok, stashInv = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, stashId)
+            local ok, stashInv = pcall(function() return exports.ox_inventory:GetInventory(stashId) end)
             if ok and stashInv and stashInv.items then
                 for _, item in pairs(stashInv.items) do
                     if item.count and item.count > 0 then
@@ -458,8 +466,9 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
                 local stolen = originalCount - remaining
                 if stolen > 0 then
                     -- ✅ Remove stolen items from the player's actual inventory
-                    pcall(exports.ox_inventory.RemoveItem, exports.ox_inventory,
-                        source, itemName, stolen)
+                    pcall(function()
+                        exports.ox_inventory:RemoveItem(source, itemName, stolen)
+                    end)
                     Debug('Removed stolen item from player:', itemName, 'x' .. stolen)
                 end
             end
@@ -533,8 +542,9 @@ AddEventHandler('playerDropped', function(reason)
                     local model = joaat('mp_m_freemode_01') -- Default model
 
                     -- Try to get model from playerskins
+                    local skinCol = Config.PlayerSkinsColumn or 'citizenid'
                     local skinResult = MySQL.single.await(
-                        'SELECT skin FROM playerskins WHERE citizenid = ? AND active = 1 LIMIT 1',
+                        ('SELECT skin FROM playerskins WHERE %s = ? AND active = 1 LIMIT 1'):format(skinCol),
                         {charId}
                     )
                     if skinResult and skinResult.skin then
@@ -546,7 +556,7 @@ AddEventHandler('playerDropped', function(reason)
 
                     -- Get inventory
                     local inventoryData = {}
-                    local invOk, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, src)
+                    local invOk, inventory = pcall(function() return exports.ox_inventory:GetInventory(src) end)
                     if invOk and inventory and inventory.items then
                         for _, item in pairs(inventory.items) do
                             if item.count and item.count > 0 then
@@ -592,7 +602,14 @@ AddEventHandler('playerDropped', function(reason)
 end)
 
 RegisterNetEvent('rde_sleepmod:createSleepingPed', function(data)
-    CreateSleepingEntry(source, data)
+    local src = source
+    -- ✅ Input validation
+    if not data or type(data) ~= 'table' then return end
+    if not data.coords or not data.model then return end
+    -- ✅ Prevent duplicate entries
+    local stateId = select(1, GetPlayerData(src))
+    if stateId and sleepingPlayers[stateId] then return end
+    CreateSleepingEntry(src, data)
 end)
 
 -- ✅ Auto-save: saves skin from playerskins into rde_sleepmod cache
@@ -605,7 +622,7 @@ RegisterNetEvent('rde_sleepmod:saveAppearanceCache', function(data)
     local skin = LoadSkinFromDB(charId)
 
     local inventoryData = {}
-    local ok, inventory = pcall(exports.ox_inventory.GetInventory, exports.ox_inventory, src)
+    local ok, inventory = pcall(function() return exports.ox_inventory:GetInventory(src) end)
     if ok and inventory and inventory.items then
         for _, item in pairs(inventory.items) do
             if item.count and item.count > 0 then
@@ -672,9 +689,9 @@ end)
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     for id in pairs(activeStashes) do
-        pcall(exports.ox_inventory.RemoveInventory, exports.ox_inventory, 'sleeping_' .. id)
+        pcall(function() return exports.ox_inventory:RemoveInventory('sleeping_' .. id) end)
     end
-    GlobalState.sleepingPlayers = nil
+    GlobalState.sleepingPlayers = {} -- ✅ StateBag can't be nil, use empty table
 end)
 
 -- ============================================
