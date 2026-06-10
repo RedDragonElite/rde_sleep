@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CONFIG v1.1.0
+-- 🐉 RDE SLEEPMOD - CONFIG v1.2.0
 -- Proximity Loading | Statebag Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================

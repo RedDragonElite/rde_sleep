@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.1.0-red?style=for-the-badge&logo=github)
+![Version](https://img.shields.io/badge/version-1.2.0-red?style=for-the-badge&logo=github)
 ![License](https://img.shields.io/badge/license-RDE%20Black%20Flag%20v6.66-black?style=for-the-badge)
 ![FiveM](https://img.shields.io/badge/FiveM-Compatible-orange?style=for-the-badge)
 ![ox_core](https://img.shields.io/badge/ox__core-Required-blue?style=for-the-badge)
@@ -51,7 +51,7 @@ Built on ox_core · ox_lib · ox_inventory · ox_target · oxmysql
 | Carry mechanics | ❌ | ✅ Full carry & release |
 | Real-time sync | Network events | ✅ GlobalState — instant |
 | Admin wake | ❌ | ✅ Triple-verified |
-| Ground placement | ❌ Floating peds | ✅ GetGroundZ + PlaceOnGround |
+| Ground placement | ❌ Floating peds | ✅ Animation-settled freeze |
 | Multi-language | ❌ | ✅ EN + DE built-in |
 | Server restart safe | ❌ Lost on restart | ✅ MySQL persistent |
 | Performance | Heavy | ✅ < 0.01ms idle |
@@ -73,7 +73,7 @@ Built on ox_core · ox_lib · ox_inventory · ox_target · oxmysql
 - **Proximity Loading** — Client-side ped spawning with configurable render/despawn distance and hysteresis (rde_props pattern)
 - **GlobalState Sync** — Server broadcasts sleeping player positions via `GlobalState.sleepingPlayers`, clients react in real-time
 - **Client-Side Peds** — Zero server entity overhead, no CNetObj limits, no network entity spawning
-- **Ground Placement** — `GetGroundZFor_3dCoord` + `PlaceObjectOnGroundProperly` for perfect placement on all terrain
+- **Pre-Cache on Login** — Server writes character data to DB immediately on `ox:playerLoaded`, ensuring `playerDropped` always has a fallback even for early disconnects (e.g. new account creation flow)
 - **Auto-Save Cache** — Player appearance and inventory cached to MySQL every 5 minutes for crash protection
 - **Skin Backfill** — On server start, any sleeping entries with missing skin data are automatically loaded from playerskins
 
@@ -97,7 +97,9 @@ Built on ox_core · ox_lib · ox_inventory · ox_target · oxmysql
 | [ox_target](https://github.com/communityox/ox_target) | ✅ Required | Ped interaction |
 
 **Optional:**
-| [illenium-appearance](https://github.com/iLLeniumStudios/illenium-appearance) | Optional | If installed, used for skin application (fallback: manual component application) |
+| Resource | Notes |
+|---|---|
+| [illenium-appearance](https://github.com/iLLeniumStudios/illenium-appearance) | If installed, used for skin application (fallback: manual component application) |
 
 ---
 
@@ -243,7 +245,8 @@ Config.PlayerSkinsColumn  = 'citizenid'  -- Column in playerskins table (some us
 │ • playerskins│ ←─────────────────────────────────── │   Loop       │
 │ • Stash mgmt │                                     │ • Ped spawn  │
 │ • Admin auth │                                     │ • Skin apply │
-│              │                                     │ • ox_target  │
+│ • Pre-Cache  │                                     │ • ox_target  │
+│   on Login   │                                     │              │
 └─────────────┘                                     └──────────────┘
 ```
 
@@ -371,8 +374,11 @@ Check `Config.PlayerSkinsColumn` in `config.lua` — it must match the column na
 **Sleeping peds not visible after server restart?**
 The script loads all sleeping entries from MySQL on start and syncs via GlobalState. If peds don't appear, check that `oxmysql` starts before `rde_sleepmod` in your `server.cfg`.
 
+**Ped not spawning after new account creation / early disconnect?**
+Fixed in v1.2.0. The server now pre-caches character data immediately on `ox:playerLoaded`, so `playerDropped` always has a fallback even if the client disconnects within the first few seconds.
+
 **Floating peds / peds underground?**
-The script uses `GetGroundZFor_3dCoord` + `PlaceObjectOnGroundProperly`. If ground detection fails (interior, custom MLO), the ped uses stored Z coordinates as fallback.
+The script uses animation-settled freeze — the ped plays the sleeping animation for 1 second before `FreezeEntityPosition` is called. If placement is still off in custom interiors, check that the stored Z coordinate is correct via `Config.Debug = true`.
 
 **ox_target options not showing?**
 Ensure `ox_target` starts before `rde_sleepmod`. Check F8 console for errors. The target is set up after skin and animation are applied — there's a ~800ms delay after spawn.
@@ -381,7 +387,7 @@ Ensure `ox_target` starts before `rde_sleepmod`. Check F8 console for errors. Th
 Verify `ox_inventory` is running. Check server console for stash registration errors. The stash is created on-demand when a player initiates robbery.
 
 **Admin Wake not showing?**
-Admin status is checked once on player load. If you change admin groups, the player needs to relog. Verify ACE permissions, ox_core groups, or Steam IDs in `config.lua`.
+Admin status is re-checked each time a target is set up (not just once at init). If still not showing, verify ACE permissions, ox_core groups, or Steam IDs in `config.lua`.
 
 ---
 
@@ -396,7 +402,16 @@ Admin status is checked once on player load. If you change admin groups, the pla
 
 ## 📝 Changelog
 
-### v1.1.0 — Current
+### v1.2.0 — Current
+- Fixed: Race condition — admin / new account ped not spawning after early disconnect
+- Fixed: `Wait()` calls inside `MySQL.ready()` callback now correctly wrapped in `CreateThread` (was blocking Lua thread)
+- Fixed: `saveAppearanceCache` client delay reduced from 10s to 3s (was too long for new account creation flow)
+- Fixed: `ox:playerLoaded` now pre-caches character data to DB immediately (server-side), ensuring `playerDropped` always has a fallback entry
+- Fixed: Login cleanup logic deferred by 5s to avoid deleting pre-cache before `playerDropped` can use it
+- Fixed: `fxmanifest.lua` now correctly includes `@ox_core/lib/init.lua` in `shared_scripts`
+- Fixed: `playerDropped` with existing in-memory entry now syncs `GlobalState` before returning
+
+### v1.1.0
 - Fixed: Ox.GetPlayer() always returns object — now checks player.charId (per ox_core docs)
 - Fixed: player.getGroups() call syntax with proper type checking
 - Fixed: GlobalState can't be set to nil — uses empty table on resource stop
@@ -418,7 +433,7 @@ Admin status is checked once on player load. If you change admin groups, the pla
 - Robbery system with ox_inventory stash
 - Carry mechanics with fireman's carry animation
 - Triple-verified admin wake system
-- Ground placement with `PlaceObjectOnGroundProperly`
+- Animation-settled freeze for correct ground placement
 - Auto-save cache every 5 minutes
 - Skin backfill on server start
 - Multi-language support (EN/DE)
@@ -445,7 +460,7 @@ Guidelines: follow existing Lua conventions, comment complex logic, test on a li
 #                                                                                 #
 #      .:: RED DRAGON ELITE (RDE)  -  BLACK FLAG SOURCE LICENSE v6.66 ::.         #
 #                                                                                 #
-#   PROJECT:    RDE_SLEEPMOD v1.1.0 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
+#   PROJECT:    RDE_SLEEPMOD v1.2.0 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
 #   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com     #
 #   ORIGIN:     https://github.com/RedDragonElite                                 #
 #                                                                                 #

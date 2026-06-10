@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.1.0
+-- 🐉 RDE SLEEPMOD - SERVER v1.2.0
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -389,8 +389,56 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
         if player and player.stateId then
             playerCache[source] = { stateId = player.stateId, charId = player.charId or charid }
             Debug('Cached player data for source:', source, '| stateId:', player.stateId, '| charId:', player.charId or charid)
-            
-            -- ✅ FIX: Immediately remove from memory if exists
+
+            -- ✅ FIX: Pre-populate DB cache NOW from characters + playerskins
+            -- This ensures playerDropped has a cache even if client disconnects before 3s timeout
+            -- (e.g. new account creation: player logs in, selects char, immediately goes to account screen)
+            CreateThread(function()
+                local stateId = player.stateId
+                local cid = player.charId or charid
+                if not stateId or not cid or cid <= 0 then return end
+
+                -- Small wait for ox_core to finish loading character data
+                Wait(1000)
+
+                -- Only write cache if no entry exists yet (don't overwrite a valid sleeping entry)
+                local existing = MySQL.single.await(
+                    'SELECT identifier FROM ' .. Config.DatabaseTable .. ' WHERE identifier = ?',
+                    {stateId}
+                )
+                if existing then
+                    Debug('ox:playerLoaded: DB cache already exists for:', stateId)
+                    return
+                end
+
+                local charData = MySQL.single.await(
+                    'SELECT x, y, z, heading, model FROM characters WHERE charid = ?',
+                    {cid}
+                )
+                if not charData then
+                    Debug('ox:playerLoaded: No character data for pre-cache, charId:', cid)
+                    return
+                end
+
+                local skin = LoadSkinFromDB(cid)
+                local model = charData.model or joaat('mp_m_freemode_01')
+                if type(model) == 'string' then model = joaat(model) end
+
+                local coords = json.encode({
+                    x = charData.x or 0, y = charData.y or 0,
+                    z = charData.z or 0, w = charData.heading or 0.0
+                })
+
+                SaveToDB(stateId, {
+                    coords = coords,
+                    model = model,
+                    charid = cid,
+                    skin = skin,
+                    inventory = '[]',
+                })
+                Debug('ox:playerLoaded: Pre-cached DB entry for:', stateId, '| skin:', skin and 'YES' or 'NO')
+            end)
+
             if sleepingPlayers[player.stateId] then
                 Debug('ox:playerLoaded: Found sleeping entry in memory, scheduling removal:', player.stateId)
             end
@@ -418,15 +466,30 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
             return
         end
         
-        -- ✅ FIX: Always clean up DB entry on login
+        -- ✅ FIX: Only clean up if there is a REAL sleeping entry in memory (not a pre-cache)
+        -- Pre-cache (written at login) only exists in DB, not in sleepingPlayers.
+        -- Don't delete it here — playerDropped needs it if the player disconnects early.
+        -- Instead, schedule a deferred cleanup: if player is still online after 5s, clear DB.
         if not sleepingPlayers[stateId] then
-            DeleteFromDB(stateId)
-            Debug('ox:playerLoaded: Cleaned orphan DB entry for:', stateId)
+            -- Deferred: wait 5s, verify player is still connected, then purge pre-cache from DB
+            SetTimeout(5000, function()
+                -- Check if player is still online (not dropped again)
+                local stillOnline = false
+                for _, pid in ipairs(GetPlayers()) do
+                    if tonumber(pid) == source then stillOnline = true; break end
+                end
+                if stillOnline then
+                    DeleteFromDB(stateId)
+                    Debug('ox:playerLoaded: Deferred cleanup of pre-cache for stable player:', stateId)
+                else
+                    Debug('ox:playerLoaded: Player re-disconnected before cleanup — keeping DB entry:', stateId)
+                end
+            end)
             return
         end
 
         local sleepData = sleepingPlayers[stateId]
-        Debug('Player reconnected:', stateId)
+        Debug('Player reconnected from real sleep:', stateId)
 
         -- ✅ NO teleport, NO characters update here!
         -- characters table is already updated by updatePosition (carry-drop)
@@ -490,11 +553,15 @@ AddEventHandler('playerDropped', function(reason)
             return
         end
         if sleepingPlayers[stateId] then
-            Debug('playerDropped: Entry already exists for:', stateId)
+            Debug('playerDropped: Entry already exists in memory for:', stateId)
+            -- ✅ Still sync to ensure GlobalState is correct
+            SyncGlobalState()
+            playerCache[src] = nil
             return
         end
 
-        -- Use cached data from DB (saved by auto-save)
+        -- ✅ FIX: Use cached data from DB
+        -- This may be a pre-cache (set on login) or a full cache (set by saveAppearanceCache)
         local cached = MySQL.single.await(
             'SELECT * FROM ' .. Config.DatabaseTable .. ' WHERE identifier = ?',
             {stateId}
@@ -701,64 +768,62 @@ end)
 MySQL.ready(function()
     if Config.AutoCreateTable then InitializeDatabase() end
 
-    Wait(2000)
+    -- ✅ FIX: All Waits must be inside CreateThread — Wait() in callbacks blocks the Lua thread
+    CreateThread(function()
+        Wait(2000)
 
-    local dbEntries = LoadAllFromDB()
-    for _, entry in ipairs(dbEntries) do
-        -- ✅ If skin is NULL, try loading from playerskins now
-        local skin = entry.skin
-        if not skin and entry.charid and entry.charid > 0 then
-            skin = LoadSkinFromDB(entry.charid)
-            if skin then
-                MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET skin = ? WHERE identifier = ?', {skin, entry.identifier})
-                Debug('Backfilled skin for:', entry.identifier)
-            end
-        end
-
-        sleepingPlayers[entry.identifier] = {
-            coords = entry.coords,
-            model = entry.model,
-            charid = entry.charid,
-            skin = skin,
-            inventory = entry.inventory,
-        }
-    end
-
-    SyncGlobalState()
-    Debug('Server initialized with', #dbEntries, 'sleeping players')
-
-    -- ✅ FIX: Robust cleanup for players who are already online
-    -- Runs multiple times with increasing delays because Ox.GetPlayer
-    -- might not be ready for all players immediately after script restart
-    local function CleanupOnlinePlayers()
-        local cleaned = 0
-        local players = GetPlayers()
-        for _, playerId in ipairs(players) do
-            local src = tonumber(playerId)
-            if src and src > 0 then
-                local stateId = select(1, GetPlayerData(src))
-                if stateId and sleepingPlayers[stateId] then
-                    Debug('Init cleanup: Removing sleeping entry for online player:', stateId)
-                    RemoveSleepingEntry(stateId)
-                    cleaned = cleaned + 1
+        local dbEntries = LoadAllFromDB()
+        for _, entry in ipairs(dbEntries) do
+            local skin = entry.skin
+            if not skin and entry.charid and entry.charid > 0 then
+                skin = LoadSkinFromDB(entry.charid)
+                if skin then
+                    MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET skin = ? WHERE identifier = ?', {skin, entry.identifier})
+                    Debug('Backfilled skin for:', entry.identifier)
                 end
             end
+
+            sleepingPlayers[entry.identifier] = {
+                coords = entry.coords,
+                model = entry.model,
+                charid = entry.charid,
+                skin = skin,
+                inventory = entry.inventory,
+            }
         end
-        return cleaned
-    end
 
-    -- Try cleanup at 3s, 8s, and 15s after init
-    Wait(3000)
-    local c1 = CleanupOnlinePlayers()
-    Debug('Init cleanup pass 1:', c1, 'entries removed')
+        SyncGlobalState()
+        Debug('Server initialized with', #dbEntries, 'sleeping players')
 
-    Wait(5000)
-    local c2 = CleanupOnlinePlayers()
-    Debug('Init cleanup pass 2:', c2, 'entries removed')
+        local function CleanupOnlinePlayers()
+            local cleaned = 0
+            local players = GetPlayers()
+            for _, playerId in ipairs(players) do
+                local src = tonumber(playerId)
+                if src and src > 0 then
+                    local stateId = select(1, GetPlayerData(src))
+                    if stateId and sleepingPlayers[stateId] then
+                        Debug('Init cleanup: Removing sleeping entry for online player:', stateId)
+                        RemoveSleepingEntry(stateId)
+                        cleaned = cleaned + 1
+                    end
+                end
+            end
+            return cleaned
+        end
 
-    Wait(7000)
-    local c3 = CleanupOnlinePlayers()
-    Debug('Init cleanup pass 3:', c3, 'entries removed')
+        Wait(3000)
+        local c1 = CleanupOnlinePlayers()
+        Debug('Init cleanup pass 1:', c1, 'entries removed')
+
+        Wait(5000)
+        local c2 = CleanupOnlinePlayers()
+        Debug('Init cleanup pass 2:', c2, 'entries removed')
+
+        Wait(7000)
+        local c3 = CleanupOnlinePlayers()
+        Debug('Init cleanup pass 3:', c3, 'entries removed')
+    end)
 end)
 
 -- ============================================

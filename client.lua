@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.1.0
+-- 🐉 RDE SLEEPMOD - CLIENT v1.2.0
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte
@@ -461,7 +461,9 @@ end)
 RegisterNetEvent('ox:playerLoaded', function()
     Debug('ox:playerLoaded')
 
-    SetTimeout(10000, function()
+    -- ✅ FIX: 3s delay (was 10s) — ensures cache is written before early disconnect
+    -- Critical for new-account creation flow where player may disconnect within seconds
+    SetTimeout(3000, function()
         local ped = cache.ped
         if ped and DoesEntityExist(ped) then
             TriggerServerEvent('rde_sleepmod:saveAppearanceCache', {

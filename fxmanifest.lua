@@ -5,7 +5,7 @@ lua54 'yes'
 name 'rde_sleepmod'
 author 'Red Dragon Elite | SerpentsByte'
 description 'Next-Gen Sleep System - Proximity Loading | GlobalState Sync | ox_core'
-version '1.1.0'
+version '1.2.0'
 
 dependencies {
     '/server:7290',
@@ -18,6 +18,7 @@ dependencies {
 
 shared_scripts {
     '@ox_lib/init.lua',
+    '@ox_core/lib/init.lua',
     'config.lua',
 }
 
