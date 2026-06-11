@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.2.3-red?style=for-the-badge&logo=github)
+![Version](https://img.shields.io/badge/version-1.2.4-red?style=for-the-badge&logo=github)
 ![License](https://img.shields.io/badge/license-RDE%20Black%20Flag%20v6.66-black?style=for-the-badge)
 ![FiveM](https://img.shields.io/badge/FiveM-Compatible-orange?style=for-the-badge)
 ![ox_core](https://img.shields.io/badge/ox__core-Required-blue?style=for-the-badge)
@@ -405,7 +405,12 @@ Admin status is re-checked each time a target is set up (not just once at init).
 
 ## 📝 Changelog
 
-### v1.2.3 — Current
+### v1.2.4 — Current
+- Fixed: Sleeping ped spawning at stale position (login coords) instead of actual disconnect position
+- Root cause: Pre-cache coords were from login or last 30s auto-save — not where player actually stood
+- Fix: `playerDropped` now always reads fresh coords directly from `characters` table (updated by ox_core on disconnect) with pre-cache as skin/model source only. Pre-cache coords used as fallback only if `characters` read fails.
+
+### v1.2.3
 - Fixed: **Critical** — sleeping ped not spawning on normal disconnect
 - Root cause: `ox:playerLoaded` cleanup logic was deleting the DB pre-cache after 5s for stable players, leaving `playerDropped` with no cache to read on disconnect
 - Fix: Pre-cache is now kept alive in DB indefinitely and updated every 30s by auto-save — `playerDropped` always finds a valid entry
@@ -477,7 +482,7 @@ Guidelines: follow existing Lua conventions, comment complex logic, test on a li
 #                                                                                 #
 #      .:: RED DRAGON ELITE (RDE)  -  BLACK FLAG SOURCE LICENSE v6.66 ::.         #
 #                                                                                 #
-#   PROJECT:    RDE_SLEEPMOD v1.2.3 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
+#   PROJECT:    RDE_SLEEPMOD v1.2.4 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
 #   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com     #
 #   ORIGIN:     https://github.com/RedDragonElite                                 #
 #                                                                                 #

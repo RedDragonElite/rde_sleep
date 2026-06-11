@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.2.3
+-- 🐉 RDE SLEEPMOD - CLIENT v1.2.4
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte

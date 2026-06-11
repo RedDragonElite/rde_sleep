@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.2.3
+-- 🐉 RDE SLEEPMOD - SERVER v1.2.4
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -557,31 +557,53 @@ AddEventHandler('playerDropped', function(reason)
         )
 
         if cached then
-            -- If skin was NULL in cache, try loading it now
-            local skin = cached.skin
-            if not skin and cached.charid and cached.charid > 0 then
-                skin = LoadSkinFromDB(cached.charid)
+            -- ✅ FIX: Always use FRESH coords from characters table — ox_core saves position on disconnect
+            -- The pre-cache coords may be stale (from login or last 30s auto-save)
+            -- characters table is updated by ox_core itself right before playerDropped fires
+            local cid = cached.charid or charId
+            local freshCoords = nil
+            if cid and cid > 0 then
+                local charData = MySQL.single.await(
+                    'SELECT x, y, z, heading FROM characters WHERE charid = ?',
+                    {cid}
+                )
+                if charData and charData.x then
+                    freshCoords = json.encode({
+                        x = charData.x, y = charData.y,
+                        z = charData.z, w = charData.heading or 0.0
+                    })
+                    Debug('playerDropped: Using fresh coords from characters table for:', stateId)
+                end
             end
-            -- If still no skin and we have charId from before drop
+
+            -- Fallback to cached coords if characters table read failed
+            local finalCoords = freshCoords or cached.coords
+
+            -- Load skin
+            local skin = cached.skin
+            if not skin and cid and cid > 0 then
+                skin = LoadSkinFromDB(cid)
+            end
             if not skin and charId and charId > 0 then
                 skin = LoadSkinFromDB(charId)
             end
 
             sleepingPlayers[stateId] = {
-                coords = cached.coords,
+                coords = finalCoords,
                 model = cached.model,
-                charid = cached.charid or charId,
+                charid = cid,
                 skin = skin,
                 inventory = cached.inventory,
             }
 
-            -- Update skin in DB if we loaded it
-            if skin and not cached.skin then
-                MySQL.update('UPDATE ' .. Config.DatabaseTable .. ' SET skin = ? WHERE identifier = ?', {skin, stateId})
-            end
+            -- Update DB with fresh coords + skin
+            MySQL.update(
+                'UPDATE ' .. Config.DatabaseTable .. ' SET coords = ?, skin = ? WHERE identifier = ?',
+                {finalCoords, skin, stateId}
+            )
 
             SyncGlobalState()
-            Debug('playerDropped: Activated sleeping entry from cache:', stateId, '| skin:', skin and 'YES' or 'NO')
+            Debug('playerDropped: Activated sleeping entry from cache:', stateId, '| skin:', skin and 'YES' or 'NO', '| freshCoords:', freshCoords and 'YES' or 'NO (fallback)')
         else
             -- ✅ FIX: No cache exists (first disconnect or table was dropped)
             -- Build sleeping entry directly from characters + playerskins tables
