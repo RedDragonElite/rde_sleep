@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.2.0
+-- 🐉 RDE SLEEPMOD - CLIENT v1.2.3
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte
@@ -523,6 +523,15 @@ end)
 
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
+    -- ✅ FIX: Save current coords before cleanup — catches disconnects and resource restarts
+    local ped = cache.ped
+    if ped and DoesEntityExist(ped) then
+        TriggerServerEvent('rde_sleepmod:saveAppearanceCache', {
+            coords = json.encode(vector4(GetEntityCoords(ped), GetEntityHeading(ped))),
+            model = GetEntityModel(ped),
+        })
+        Debug('onResourceStop: coords saved')
+    end
     if isCarrying and carriedEntity then
         StopCarrying(carriedEntity, GetEntityCoords(carriedEntity), GetEntityHeading(carriedEntity))
     end
@@ -536,7 +545,8 @@ end)
 
 CreateThread(function()
     while true do
-        Wait(300000)
+        -- ✅ FIX: 30s interval (was 5min) — ensures coords are always fresh on disconnect
+        Wait(30000)
         local ped = cache.ped
         if ped and DoesEntityExist(ped) then
             TriggerServerEvent('rde_sleepmod:saveAppearanceCache', {

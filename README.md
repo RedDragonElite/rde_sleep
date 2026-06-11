@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.2.0-red?style=for-the-badge&logo=github)
+![Version](https://img.shields.io/badge/version-1.2.3-red?style=for-the-badge&logo=github)
 ![License](https://img.shields.io/badge/license-RDE%20Black%20Flag%20v6.66-black?style=for-the-badge)
 ![FiveM](https://img.shields.io/badge/FiveM-Compatible-orange?style=for-the-badge)
 ![ox_core](https://img.shields.io/badge/ox__core-Required-blue?style=for-the-badge)
@@ -377,6 +377,9 @@ The script loads all sleeping entries from MySQL on start and syncs via GlobalSt
 **Ped not spawning after new account creation / early disconnect?**
 Fixed in v1.2.0. The server now pre-caches character data immediately on `ox:playerLoaded`, so `playerDropped` always has a fallback even if the client disconnects within the first few seconds.
 
+**Sleeping ped spawns at wrong position (login position instead of actual disconnect position)?**
+Fixed in v1.2.1 + v1.2.2. The auto-save interval was 5 minutes — if a player disconnected between saves, the ped spawned where they were when they last logged in. Reduced to 30 seconds. Additionally, `onResourceStop` now sends a final coord update before cleanup, covering crashes and `restart rde_sleep` scenarios.
+
 **Floating peds / peds underground?**
 The script uses animation-settled freeze — the ped plays the sleeping animation for 1 second before `FreezeEntityPosition` is called. If placement is still off in custom interiors, check that the stored Z coordinate is correct via `Config.Debug = true`.
 
@@ -402,7 +405,21 @@ Admin status is re-checked each time a target is set up (not just once at init).
 
 ## 📝 Changelog
 
-### v1.2.0 — Current
+### v1.2.3 — Current
+- Fixed: **Critical** — sleeping ped not spawning on normal disconnect
+- Root cause: `ox:playerLoaded` cleanup logic was deleting the DB pre-cache after 5s for stable players, leaving `playerDropped` with no cache to read on disconnect
+- Fix: Pre-cache is now kept alive in DB indefinitely and updated every 30s by auto-save — `playerDropped` always finds a valid entry
+
+### v1.2.2
+- Fixed: Race condition between `onResourceStop` coord save and `playerDropped` DB read
+- Fixed: `playerDropped` delay increased 500ms → 1500ms — ensures `saveAppearanceCache` from `onResourceStop` is written to DB before coords are read
+
+### v1.2.1
+- Fixed: Sleeping ped always spawned at login position instead of actual disconnect position
+- Fixed: Auto-save interval reduced from 5 minutes to 30 seconds — coords now always fresh on disconnect
+- Fixed: `onResourceStop` now saves current coords to DB before cleanup (catches crashes and resource restarts)
+
+### v1.2.0
 - Fixed: Race condition — admin / new account ped not spawning after early disconnect
 - Fixed: `Wait()` calls inside `MySQL.ready()` callback now correctly wrapped in `CreateThread` (was blocking Lua thread)
 - Fixed: `saveAppearanceCache` client delay reduced from 10s to 3s (was too long for new account creation flow)
@@ -460,7 +477,7 @@ Guidelines: follow existing Lua conventions, comment complex logic, test on a li
 #                                                                                 #
 #      .:: RED DRAGON ELITE (RDE)  -  BLACK FLAG SOURCE LICENSE v6.66 ::.         #
 #                                                                                 #
-#   PROJECT:    RDE_SLEEPMOD v1.2.0 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
+#   PROJECT:    RDE_SLEEPMOD v1.2.3 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
 #   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com     #
 #   ORIGIN:     https://github.com/RedDragonElite                                 #
 #                                                                                 #

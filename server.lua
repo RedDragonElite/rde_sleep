@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.2.0
+-- 🐉 RDE SLEEPMOD - SERVER v1.2.3
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -466,25 +466,12 @@ AddEventHandler('ox:playerLoaded', function(source, userid, charid)
             return
         end
         
-        -- ✅ FIX: Only clean up if there is a REAL sleeping entry in memory (not a pre-cache)
-        -- Pre-cache (written at login) only exists in DB, not in sleepingPlayers.
-        -- Don't delete it here — playerDropped needs it if the player disconnects early.
-        -- Instead, schedule a deferred cleanup: if player is still online after 5s, clear DB.
+        -- ✅ FIX: No sleeping entry in memory = player logged in fresh (no real sleeper)
+        -- The DB has a pre-cache entry written at login — DO NOT delete it.
+        -- The 30s auto-save (saveAppearanceCache) keeps it updated with current coords.
+        -- playerDropped will read it when they disconnect.
         if not sleepingPlayers[stateId] then
-            -- Deferred: wait 5s, verify player is still connected, then purge pre-cache from DB
-            SetTimeout(5000, function()
-                -- Check if player is still online (not dropped again)
-                local stillOnline = false
-                for _, pid in ipairs(GetPlayers()) do
-                    if tonumber(pid) == source then stillOnline = true; break end
-                end
-                if stillOnline then
-                    DeleteFromDB(stateId)
-                    Debug('ox:playerLoaded: Deferred cleanup of pre-cache for stable player:', stateId)
-                else
-                    Debug('ox:playerLoaded: Player re-disconnected before cleanup — keeping DB entry:', stateId)
-                end
-            end)
+            Debug('ox:playerLoaded: No real sleeper in memory for:', stateId, '— keeping DB pre-cache alive for playerDropped')
             return
         end
 
@@ -547,7 +534,9 @@ AddEventHandler('playerDropped', function(reason)
     -- ✅ Get data BEFORE player object disappears
     local stateId, charId, player = GetPlayerData(src)
 
-    SetTimeout(500, function()
+    -- ✅ FIX: 1500ms delay (was 500ms) — gives onResourceStop's saveAppearanceCache
+    -- enough time to arrive and write fresh coords to DB before we read them
+    SetTimeout(1500, function()
         if not stateId then
             Debug('playerDropped: No stateId for source:', src)
             return
