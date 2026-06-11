@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.2.4-red?style=for-the-badge&logo=github)
+![Version](https://img.shields.io/badge/version-1.2.9-red?style=for-the-badge&logo=github)
 ![License](https://img.shields.io/badge/license-RDE%20Black%20Flag%20v6.66-black?style=for-the-badge)
 ![FiveM](https://img.shields.io/badge/FiveM-Compatible-orange?style=for-the-badge)
 ![ox_core](https://img.shields.io/badge/ox__core-Required-blue?style=for-the-badge)
@@ -66,7 +66,7 @@ Built on ox_core · ox_lib · ox_inventory · ox_target · oxmysql
 - **Robbery System** — Search pockets via progress bar, opens ox_inventory stash with the sleeping player's items
 - **Carry Mechanics** — Pick up sleeping peds, carry them with fireman's carry animation, release with [E]
 - **Admin Wake** — Triple-verified admin system (ACE + ox_core Groups + Steam ID) to force-wake sleeping players
-- **Sleeping Animation** — Proper GTA V lying animation (`amb@world_human_bum_slumped`)
+- **Randomized Sleeping Poses** — 5 different GTA V lying animations picked randomly per ped for natural variety (left side, right side, on back — all from `amb@world_human_bum_slumped`)
 - **Auto-Remove on Reconnect** — When a player logs back in, their sleeping ped is automatically removed
 
 ### 🚀 Technical
@@ -405,7 +405,31 @@ Admin status is re-checked each time a target is set up (not just once at init).
 
 ## 📝 Changelog
 
-### v1.2.4 — Current
+### v1.2.9 — Current
+- Fixed: Random sleeping poses occasionally showing standing/no-animation ped
+- Root cause: `idle_b` clip name doesn't exist in `@idle_a` animation dicts — GTA silently fails and plays no animation
+- Fix: All clips corrected to match their dict (`@base` → `base`, `@idle_a` → `idle_a`)
+
+### v1.2.8
+- Fixed: Own sleeping ped still spawning standing/frozen after `restart rde_sleep`
+- Root cause: `LocalPlayer.state.identifier` returns `nil` immediately on resource restart — ox_core sets the statebag slightly later
+- Fix: Startup now polls `LocalPlayer.state.identifier` up to 20 times with 250ms intervals (5s max) before marking player as ready
+
+### v1.2.7
+- Fixed: Own sleeping ped spawning as frozen/drunk-standing after `restart rde_sleep`
+- Root cause: `ownStateId` was only set in `ox:playerLoaded` which doesn't fire on resource restart — so own stateId was `nil` and own sleeper was spawned by proximity loop
+- Fix: `ownStateId` is now also read from `LocalPlayer.state.identifier` on resource startup
+
+### v1.2.6
+- Fixed: Own sleeping ped briefly visible (flicker/multiple spawns) on join before cleanup
+- Root cause: Proximity loop was spawning own stateId entry from GlobalState before `ox:playerLoaded` cleanup fired
+- Fix: Client now caches own `stateId` on `ox:playerLoaded` and skips it in the proximity loop entirely
+
+### v1.2.5
+- Added: Randomized sleeping poses — 5 different animations picked randomly per ped (left side, right side, on back variants) for a more natural and varied look
+- Changed: `Config.SleepingAnimation` replaced by `Config.SleepingAnimations` array — fully configurable, add or remove poses as needed
+
+### v1.2.4
 - Fixed: Sleeping ped spawning at stale position (login coords) instead of actual disconnect position
 - Root cause: Pre-cache coords were from login or last 30s auto-save — not where player actually stood
 - Fix: `playerDropped` now always reads fresh coords directly from `characters` table (updated by ox_core on disconnect) with pre-cache as skin/model source only. Pre-cache coords used as fallback only if `characters` read fails.
@@ -482,7 +506,7 @@ Guidelines: follow existing Lua conventions, comment complex logic, test on a li
 #                                                                                 #
 #      .:: RED DRAGON ELITE (RDE)  -  BLACK FLAG SOURCE LICENSE v6.66 ::.         #
 #                                                                                 #
-#   PROJECT:    RDE_SLEEPMOD v1.2.4 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
+#   PROJECT:    RDE_SLEEPMOD v1.2.9 (SLEEP & LOGOUT SYSTEM FOR FIVEM)             #
 #   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com     #
 #   ORIGIN:     https://github.com/RedDragonElite                                 #
 #                                                                                 #

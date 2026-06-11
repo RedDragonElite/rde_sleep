@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - SERVER v1.2.4
+-- 🐉 RDE SLEEPMOD - SERVER v1.2.9
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================

@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CLIENT v1.2.4
+-- 🐉 RDE SLEEPMOD - CLIENT v1.2.9
 -- Proximity Loading | GlobalState Sync | ox_core
 -- Pattern: rde_props / rde_doors style
 -- Author: Red Dragon Elite | SerpentsByte
@@ -19,6 +19,7 @@ local carriedEntity = nil
 local carriedIdentifier = nil
 local isAdmin = false
 local playerReady = false
+local ownStateId = nil  -- ✅ Own stateId — skip spawning our own sleeper
 
 -- ============================================
 -- 🔧 UTILITY
@@ -214,9 +215,11 @@ local function SpawnSleepingPed(identifier, data)
         if not DoesEntityExist(ped) then return end
 
         -- ✅ Play sleeping animation
-        if LoadAnimDict(Config.SleepingAnimation.dict) then
-            TaskPlayAnim(ped, Config.SleepingAnimation.dict, Config.SleepingAnimation.clip,
-                8.0, -8.0, -1, 1, 0, false, false, false)
+        -- ✅ Random sleeping pose per ped
+        local anims = Config.SleepingAnimations
+        local anim = anims[math.random(#anims)]
+        if LoadAnimDict(anim.dict) then
+            TaskPlayAnim(ped, anim.dict, anim.clip, 8.0, -8.0, -1, 1, 0, false, false, false)
         end
 
         -- ✅ Wait for animation to settle, then freeze (NO PlaceObjectOnGroundProperly!)
@@ -387,9 +390,11 @@ function StopCarrying(entity, origCoords, origHeading)
     SetEntityCollision(entity, true, true)
 
     -- ✅ Play anim BEFORE freezing
-    if LoadAnimDict(Config.SleepingAnimation.dict) then
-        TaskPlayAnim(entity, Config.SleepingAnimation.dict, Config.SleepingAnimation.clip,
-            8.0, -8.0, -1, 1, 0, false, false, false)
+    -- ✅ Random sleeping pose on carry drop too
+    local anims = Config.SleepingAnimations
+    local anim = anims[math.random(#anims)]
+    if LoadAnimDict(anim.dict) then
+        TaskPlayAnim(entity, anim.dict, anim.clip, 8.0, -8.0, -1, 1, 0, false, false, false)
     end
     
     Wait(1000)
@@ -414,8 +419,18 @@ end
 
 CreateThread(function()
     while not cache.ped do Wait(500) end
-    playerReady = true
 
+    -- ✅ FIX: Poll for own stateId — LocalPlayer.state may not be ready immediately on resource restart
+    -- ox_core sets the statebag slightly after resource start, so we retry until we get it
+    local stateIdAttempts = 0
+    while not ownStateId and stateIdAttempts < 20 do
+        ownStateId = LocalPlayer.state.identifier or nil
+        if not ownStateId then Wait(250) end
+        stateIdAttempts = stateIdAttempts + 1
+    end
+    Debug('Startup: own stateId:', ownStateId or 'NOT FOUND after retries')
+
+    playerReady = true
     isAdmin = lib.callback.await('rde_sleepmod:isAdmin', false) or false
     Debug('Player ready | admin:', isAdmin)
 
@@ -432,6 +447,9 @@ CreateThread(function()
         local visibleCount = 0
 
         for identifier, data in pairs(sleepData) do
+            -- ✅ Never spawn our own sleeper — it gets removed by ox:playerLoaded
+            if ownStateId and identifier == ownStateId then goto skipOwn end
+
             local dist = #(playerCoords - vector3(data.x, data.y, data.z))
 
             if dist <= Config.Performance.renderDistance then
@@ -442,6 +460,7 @@ CreateThread(function()
             elseif dist > Config.Performance.despawnDistance and spawnedPeds[identifier] then
                 DespawnSleepingPed(identifier)
             end
+            ::skipOwn::
         end
 
         for identifier in pairs(spawnedPeds) do
@@ -460,6 +479,9 @@ end)
 
 RegisterNetEvent('ox:playerLoaded', function()
     Debug('ox:playerLoaded')
+    -- ✅ Cache own stateId so proximity loop skips our own sleeper
+    ownStateId = LocalPlayer.state.identifier or nil
+    Debug('ox:playerLoaded: own stateId:', ownStateId)
 
     -- ✅ FIX: 3s delay (was 10s) — ensures cache is written before early disconnect
     -- Critical for new-account creation flow where player may disconnect within seconds
@@ -475,6 +497,7 @@ RegisterNetEvent('ox:playerLoaded', function()
 end)
 
 RegisterNetEvent('ox:playerLogout', function()
+    ownStateId = nil
     local ped = cache.ped
     if not ped then return end
     TriggerServerEvent('rde_sleepmod:createSleepingPed', {

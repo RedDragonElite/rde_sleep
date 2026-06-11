@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CONFIG v1.2.4
+-- 🐉 RDE SLEEPMOD - CONFIG v1.2.9
 -- Proximity Loading | Statebag Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -76,9 +76,14 @@ Config.CarryOffset = {
     pitch = 0.5, roll = 0.5, yaw = 0.0
 }
 
-Config.SleepingAnimation = {
-    dict = 'amb@world_human_bum_slumped@male@laying_on_left_side@base',
-    clip = 'base'
+-- Multiple sleeping poses — one is picked randomly per ped for variety
+-- ✅ Verified clip names: @base dicts use 'base', @idle_a dicts use 'idle_a'
+Config.SleepingAnimations = {
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_left_side@base',        clip = 'base'   },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_left_side@idle_a',      clip = 'idle_a' },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_back@base',             clip = 'base'   },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_back@idle_a',           clip = 'idle_a' },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_right_side@base',       clip = 'base'   },
 }
 
 Config.RobAnimation = {
