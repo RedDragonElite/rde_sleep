@@ -138,6 +138,12 @@ exports.rde_sleep:IsSleepingClone(entity)  -- returns boolean
 
 ## 📋 Changelog
 
+### v1.3.2
+- **FIX** Sleeping clone stands upright after server restart — post-skin delay increased from 500ms to 1000ms. illenium-appearance clears ped tasks asynchronously; 500ms was a race condition on restart. Added animation verification with one retry: if `IsEntityPlayingAnim` returns false after Phase 2, `TaskPlayAnim` fires again.
+
+### v1.3.1
+- **FIX** Stash item duplication on resource restart — `activeStashes` is in-memory only and gets wiped on restart. ox_inventory persists stash contents in DB, so snapshot items were added on top of existing items on next access. `RegisterStash` now checks `GetInventory` first and only populates from snapshot if the stash is genuinely empty.
+
 ### v1.3.0
 - **FIX** `@base` animation clips removed from `Config.SleepingAnimations` — they caused an idle-twitch loop when played with flag `1`. Config now accepts `@idle_a` entries only.
 - **FIX** Two-phase animation in `SpawnSleepingPed`: `@base` intro played once (ped lies down), then transitions to `@idle_a` loop (ped sleeps). Carry-drop goes straight to `@idle_a` (ped already horizontal).

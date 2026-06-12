@@ -293,8 +293,24 @@ local function RegisterStash(identifier)
     end)
     if not ok then return false end
 
-    -- ✅ Only add items on FIRST registration
-    if data.inventory then
+    -- BUG FIX v1.3.1: activeStashes guard is in-memory only — wiped on resource restart.
+    -- ox_inventory persists stash contents in DB across restarts.
+    -- Without this check, snapshot items get added ON TOP of existing DB items → duplication.
+    -- Solution: only populate from snapshot if the stash is genuinely empty in ox_inventory.
+    local stashIsEmpty = true
+    local ok2, existingInv = pcall(function()
+        return exports.ox_inventory:GetInventory(stashId)
+    end)
+    if ok2 and existingInv and existingInv.items then
+        for _, item in pairs(existingInv.items) do
+            if item.count and item.count > 0 then
+                stashIsEmpty = false
+                break
+            end
+        end
+    end
+
+    if stashIsEmpty and data.inventory then
         local items = type(data.inventory) == 'string' and json.decode(data.inventory) or data.inventory
         if items then
             for _, item in pairs(items) do

@@ -210,8 +210,11 @@ local function SpawnSleepingPed(identifier, data)
             if spawnedPeds[identifier] then spawnedPeds[identifier].skinApplied = true end
         end
 
-        -- ✅ FIX: illenium-appearance clears ped tasks — need longer delay before anim
-        Wait(500)
+        -- ✅ FIX v1.3.2: Wait increased 500ms → 1000ms.
+        -- illenium-appearance.setPedAppearance() clears ped tasks asynchronously.
+        -- 500ms was a race condition — on server restart illenium finishes AFTER
+        -- our TaskPlayAnim fires, wiping the animation and leaving the ped standing.
+        Wait(1000)
         if not DoesEntityExist(ped) then return end
 
         -- ✅ ANIM FIX v1.3.0 — Two-phase sleep animation
@@ -236,6 +239,17 @@ local function SpawnSleepingPed(identifier, data)
         -- Phase 2 — loop the actual sleep idle
         if DoesEntityExist(ped) and LoadAnimDict(anim.dict) then
             TaskPlayAnim(ped, anim.dict, anim.clip, 8.0, -8.0, -1, 1, 0, false, false, false)
+        end
+
+        -- ✅ FIX v1.3.2: Verify animation is actually playing — retry once if not.
+        -- Guards against illenium clearing tasks in the gap between our TaskPlayAnim
+        -- and illenium finishing its own async work (race condition on server restart).
+        Wait(300)
+        if DoesEntityExist(ped) and not IsEntityPlayingAnim(ped, anim.dict, anim.clip, 3) then
+            if LoadAnimDict(anim.dict) then
+                TaskPlayAnim(ped, anim.dict, anim.clip, 8.0, -8.0, -1, 1, 0, false, false, false)
+            end
+            Wait(300)
         end
 
         -- ✅ Wait for animation to settle, then freeze (NO PlaceObjectOnGroundProperly!)
