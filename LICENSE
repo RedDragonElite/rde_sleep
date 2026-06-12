@@ -2,8 +2,8 @@
 #                                                                                 #
 #      .:: RED DRAGON ELITE (RDE)  -  BLACK FLAG SOURCE LICENSE v6.66 ::.         #
 #                                                                                 #
-#   PROJECT:    RDE_SLEEP v1.0.2 (SLEEP & LOGOUT SYSTEM FOR FIVEM)                #
-#   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com     #
+#   PROJECT:    RDE_SLEEP v1.3.2 (NEXT-GEN OFFLINE SLEEP SYSTEM FOR FIVEM OX_CORE)#
+#   ARCHITECT:  .:: RDE ⧌ Shin [△ ᛋᛅᚱᛒᛅᚾᛏᛋ ᛒᛁᛏᛅ ▽] ::. | https://rd-elite.com         #
 #   ORIGIN:     https://github.com/RedDragonElite                                 #
 #                                                                                 #
 #   WARNING: THIS CODE IS PROTECTED BY DIGITAL VOODOO AND PURE HATRED FOR LEAKERS #
@@ -17,10 +17,10 @@
 #                                                                                 #
 #   2. // THE TEBEX KILL SWITCH (COMMERCIAL SUICIDE)                              #
 #      Listen closely, you parasites:                                             #
-#      If I find this script on Tebex, Patreon, or in a paid "Premium Pack":      #
+#      If I find this script on any paid store, Patreon, or "Premium Pack":       #
 #      > I will DMCA your store into oblivion.                                    #
-#      > I will publicly shame your community.                                    #
-#      > I hope your server lag spikes to 9999ms every time you blink.            #
+#      > I will publicly shame your community on Nostr. Permanently.              #
+#      > I hope every sleeping ped spawns directly inside your player model.      #
 #      SELLING FREE WORK IS THEFT. AND I AM THE JUDGE.                            #
 #                                                                                 #
 #   3. // THE CREDIT OATH                                                         #
@@ -29,9 +29,10 @@
 #      Don't be a skid. Respect the architecture.                                 #
 #                                                                                 #
 #   4. // THE CURSE OF THE COPY-PASTE                                             #
-#      This code uses GlobalState, proximity loading, and async skin callbacks.   #
-#      If you just copy-paste without reading, it WILL break.                     #
-#      Don't come crying to my DMs. RTFM or learn to code.                        #
+#      This code implements real StateBag sync, server-side authority,            #
+#      async MySQL, proximity loading, and skin persistence.                      #
+#      If you copy-paste without understanding, you WILL break something.         #
+#      Don't come crying to my DMs. RTFM.                                         #
 #                                                                                 #
 #   --------------------------------------------------------------------------    #
 #   "We build the future on the graves of paid resources."                        #
