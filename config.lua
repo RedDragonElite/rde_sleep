@@ -1,5 +1,5 @@
 -- ============================================
--- 🐉 RDE SLEEPMOD - CONFIG v1.2.9
+-- 🐉 RDE SLEEPMOD - CONFIG v1.3.0
 -- Proximity Loading | Statebag Sync | ox_core
 -- Author: Red Dragon Elite | SerpentsByte
 -- ============================================
@@ -76,14 +76,18 @@ Config.CarryOffset = {
     pitch = 0.5, roll = 0.5, yaw = 0.0
 }
 
--- Multiple sleeping poses — one is picked randomly per ped for variety
--- ✅ Verified clip names: @base dicts use 'base', @idle_a dicts use 'idle_a'
+-- ============================================
+-- 😴 SLEEPING ANIMATIONS
+-- ============================================
+-- ONLY @idle_a clips here — these are proper looping sleep anims.
+-- @base clips (intro/lie-down) are played automatically by SpawnSleepingPed
+-- as a one-shot before the loop kicks in. Do NOT add @base clips here.
+--
+-- All dicts are ambient world anims — always loaded, no mission dependency.
 Config.SleepingAnimations = {
-    { dict = 'amb@world_human_bum_slumped@male@laying_on_left_side@base',        clip = 'base'   },
-    { dict = 'amb@world_human_bum_slumped@male@laying_on_left_side@idle_a',      clip = 'idle_a' },
-    { dict = 'amb@world_human_bum_slumped@male@laying_on_back@base',             clip = 'base'   },
-    { dict = 'amb@world_human_bum_slumped@male@laying_on_back@idle_a',           clip = 'idle_a' },
-    { dict = 'amb@world_human_bum_slumped@male@laying_on_right_side@base',       clip = 'base'   },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_back@idle_a',       clip = 'idle_a' },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_left_side@idle_a',  clip = 'idle_a' },
+    { dict = 'amb@world_human_bum_slumped@male@laying_on_right_side@idle_a', clip = 'idle_a' },
 }
 
 Config.RobAnimation = {

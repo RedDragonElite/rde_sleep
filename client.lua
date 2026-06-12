@@ -214,11 +214,27 @@ local function SpawnSleepingPed(identifier, data)
         Wait(500)
         if not DoesEntityExist(ped) then return end
 
-        -- ✅ Play sleeping animation
-        -- ✅ Random sleeping pose per ped
+        -- ✅ ANIM FIX v1.3.0 — Two-phase sleep animation
+        -- Phase 1: @base clip played ONCE  → ped physically lies down (no loop)
+        -- Phase 2: @idle_a clip looped     → ped breathes/sleeps in position
+        --
+        -- ROOT CAUSE of old "idle twitch" bug:
+        --   @base clips with flag=1 (loop) repeat the lie-down intro forever.
+        --   Config.SleepingAnimations now contains ONLY @idle_a dicts.
+        --   This function derives the @base dict automatically for phase 1.
         local anims = Config.SleepingAnimations
-        local anim = anims[math.random(#anims)]
-        if LoadAnimDict(anim.dict) then
+        local anim  = anims[math.random(#anims)]  -- picks an @idle_a entry
+
+        -- Phase 1 — derive @base dict from @idle_a dict name
+        local baseDict = anim.dict:gsub('@idle_a', '@base')
+        if LoadAnimDict(baseDict) then
+            -- flag 0 = play once, duration 2400ms covers the full lie-down motion
+            TaskPlayAnim(ped, baseDict, 'base', 8.0, -8.0, 2400, 0, 0, false, false, false)
+            Wait(2200)
+        end
+
+        -- Phase 2 — loop the actual sleep idle
+        if DoesEntityExist(ped) and LoadAnimDict(anim.dict) then
             TaskPlayAnim(ped, anim.dict, anim.clip, 8.0, -8.0, -1, 1, 0, false, false, false)
         end
 
@@ -357,6 +373,9 @@ function StartCarrying(entity, identifier)
     lib.showTextUI(GetLanguageString('press_release'), { position = 'right-center' })
 
     CreateThread(function()
+        -- Wait(0) is required here — IsControlJustPressed() only returns true
+        -- for exactly one frame. Any higher interval would miss the keypress.
+        -- Legitimate Standards exception: control detection thread.
         while isCarrying and DoesEntityExist(entity) and DoesEntityExist(playerPed) do
             if IsControlJustPressed(0, 38) or IsEntityDead(playerPed) then
                 StopCarrying(entity, initCoords, initHeading)
@@ -389,10 +408,10 @@ function StopCarrying(entity, origCoords, origHeading)
     SetEntityHeading(entity, GetEntityHeading(playerPed))
     SetEntityCollision(entity, true, true)
 
-    -- ✅ Play anim BEFORE freezing
-    -- ✅ Random sleeping pose on carry drop too
+    -- Ped is already horizontal (was in carry anim) — skip the lie-down intro,
+    -- go straight to the sleep idle loop.
     local anims = Config.SleepingAnimations
-    local anim = anims[math.random(#anims)]
+    local anim  = anims[math.random(#anims)]
     if LoadAnimDict(anim.dict) then
         TaskPlayAnim(entity, anim.dict, anim.clip, 8.0, -8.0, -1, 1, 0, false, false, false)
     end
